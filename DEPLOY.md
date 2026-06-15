@@ -48,17 +48,17 @@ Brauzerda ochsangiz `✅ Bot ishlayapti` chiqadi.
 ## 3-bosqich. Uxlab qolmasligi uchun (MUHIM!)
 
 Render bepul tarifi 15 daqiqa harakatsizlikdan keyin botni **uxlatadi**.
-Buni oldini olish uchun har 5 daqiqada ping yuboramiz:
 
-1. [uptimerobot.com](https://uptimerobot.com) — bepul ro'yxatdan o'ting.
-2. **+ New Monitor**:
-   - Monitor Type: **HTTP(s)**
-   - Friendly Name: `Uzbek Bot`
-   - URL: Render bergan manzil (masalan `https://super-uzbek-bot.onrender.com`)
-   - Monitoring Interval: **5 minutes**
-3. **Create Monitor** bosing.
+Buni hal qilish uchun loyihada **GitHub Actions** keep-alive workflow'i bor
+(`.github/workflows/keep-alive.yml`). U har 10 daqiqada bot manziliga avtomatik
+ping yuboradi — qo'shimcha xizmat (UptimeRobot va h.k.) **kerak emas**.
 
-Endi bot 24/7 uyg'oq turadi. ✅
+Workflow GitHub'ga push qilingach o'zi ishlay boshlaydi. Tekshirish:
+**GitHub repo → Actions → "Keep Render bot awake"** → "Run workflow" bilan
+qo'lda ham sinab ko'rish mumkin.
+
+> ℹ️ Eslatma: repozitoriy 60 kun butunlay harakatsiz qolsa, GitHub jadvalli
+> workflow'larni vaqtincha o'chiradi. Faol loyihada muammo bo'lmaydi.
 
 ---
 
