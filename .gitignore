@@ -1,0 +1,18 @@
+# Maxfiy ma'lumotlar — HECH QACHON GitHub'ga yuklamang!
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Loglar
+*.log
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Claude Code sozlamalari
+.claude/

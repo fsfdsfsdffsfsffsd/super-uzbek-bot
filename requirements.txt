@@ -1,0 +1,7 @@
+python-telegram-bot
+aiohttp
+beautifulsoup4
+certifi
+requests
+python-dotenv
+Brotli
