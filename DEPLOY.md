@@ -32,10 +32,10 @@ Quyidagi 3 bosqichni ketma-ket bajaring.
 4. **Apply** bosing.
 5. So'ralganda **Environment Variables** (muhit o'zgaruvchilari) ni kiriting:
 
-   | Key             | Value                                            |
-   |-----------------|--------------------------------------------------|
-   | `BOT_TOKEN`     | `8231594493:AAGE8-...` (BotFather bergan token)  |
-   | `ADMIN_CHAT_ID` | `1193213437`                                     |
+   | Key             | Value                                       |
+   |-----------------|---------------------------------------------|
+   | `BOT_TOKEN`     | BotFather bergan token                       |
+   | `ADMIN_CHAT_ID` | Telegram chat ID raqamingiz                  |
 
 6. **Create / Deploy** bosing. 2–3 daqiqada bot ishga tushadi.
    Loglarda `Bot ishga tushdi` va `Health-check server ...` ko'rinsa — tayyor ✅
