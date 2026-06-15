@@ -14,9 +14,8 @@ from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 from telegram.constants import ParseMode
-from typing import List, Dict, Optional, Any, Tuple
+from typing import List, Dict, Optional, Any
 import time
-import json
 from dataclasses import dataclass
 from enum import Enum
 
@@ -123,9 +122,6 @@ class SuperUzbekBot:
         self.weather_url = "https://yandex.uz/pogoda/ru/tashkent?lat=41.330278&lon=69.337088"
         self.forecast_url = "https://yandex.uz/pogoda/ru/tashkent?lat=41.311151&lon=69.279737"
         self.magnetic_url = "https://www.gismeteo.ru/weather-tashkent-5331/gm/"
-        # ===== YANGI QO'SHILDI: Ramazon uchun aladhan.com API =====
-        self.aladhan_url = "https://api.aladhan.com/v1/calendar/{year}/{month}?latitude=41.2995&longitude=69.2401&method=3"
-        # ==========================================================
         self.cached_currency = None
         self.cached_weather = None
         self.cached_prayer = None
@@ -133,9 +129,6 @@ class SuperUzbekBot:
         self.cached_magnetic = None
         self.cached_weather_3day = None  # 3 kunlik ob-havo uchun
         self.cached_magnetic_3day = None  # 3 kunlik magnit uchun
-        # ===== YANGI QO'SHILDI: Ramazon keshi =====
-        self.cached_ramadan_calendar = None  # 30 kunlik taqvim uchun
-        # ===========================================
         # Qachon yangilanganini bilish uchun
         self.last_update_time = "Hali yangilanmadi"
         self.headers = {
@@ -148,7 +141,8 @@ class SuperUzbekBot:
             'Upgrade-Insecure-Requests': '1'
         }
         self.session = None
-        
+        self.background_task = None  # Fon yangilash vazifasi (toza to'xtatish uchun)
+
     async def start_background_tasks(self):
         """Ma'lumotlarni har 5 daqiqada yangilash (1000 foydalanuvchi uchun optimallashtirildi)"""
         while True:
@@ -384,10 +378,6 @@ class SuperUzbekBot:
             emoji, status = "🟣", "Juda zararli"
         else:
             emoji, status = "🟤", "Xavfli"
-
-        now = datetime.now()
-        raw_date = now.strftime("%A, %d %B") 
-        formatted_date = self.translate_date_to_uz(raw_date)
 
         result = (
             f"😷 *Havoning Tozaligi*\n"
@@ -848,109 +838,6 @@ class SuperUzbekBot:
         )
         return result
 
-    # ========== RAMAZON VAQTLARI (YANGI QO'SHILDI) ==========
-
-    # Muslim.uz rasmiy taqvimi — Toshkent shahri, 1447-h / 2026-m
-    RAMADAN_2026 = [
-        {"ramadan_day": 1,  "weekday": "Payshanba",  "date": "19-fevral", "month": 2, "day": 19, "saharlik": "05:54", "iftar": "18:05"},
-        {"ramadan_day": 2,  "weekday": "Juma",        "date": "20-fevral", "month": 2, "day": 20, "saharlik": "05:53", "iftar": "18:07"},
-        {"ramadan_day": 3,  "weekday": "Shanba",      "date": "21-fevral", "month": 2, "day": 21, "saharlik": "05:51", "iftar": "18:08"},
-        {"ramadan_day": 4,  "weekday": "Yakshanba",   "date": "22-fevral", "month": 2, "day": 22, "saharlik": "05:50", "iftar": "18:09"},
-        {"ramadan_day": 5,  "weekday": "Dushanba",    "date": "23-fevral", "month": 2, "day": 23, "saharlik": "05:49", "iftar": "18:10"},
-        {"ramadan_day": 6,  "weekday": "Seshanba",    "date": "24-fevral", "month": 2, "day": 24, "saharlik": "05:47", "iftar": "18:11"},
-        {"ramadan_day": 7,  "weekday": "Chorshanba",  "date": "25-fevral", "month": 2, "day": 25, "saharlik": "05:46", "iftar": "18:13"},
-        {"ramadan_day": 8,  "weekday": "Payshanba",   "date": "26-fevral", "month": 2, "day": 26, "saharlik": "05:44", "iftar": "18:14"},
-        {"ramadan_day": 9,  "weekday": "Juma",        "date": "27-fevral", "month": 2, "day": 27, "saharlik": "05:43", "iftar": "18:15"},
-        {"ramadan_day": 10, "weekday": "Shanba",      "date": "28-fevral", "month": 2, "day": 28, "saharlik": "05:41", "iftar": "18:16"},
-        {"ramadan_day": 11, "weekday": "Yakshanba",   "date": "1-mart",    "month": 3, "day": 1,  "saharlik": "05:40", "iftar": "18:17"},
-        {"ramadan_day": 12, "weekday": "Dushanba",    "date": "2-mart",    "month": 3, "day": 2,  "saharlik": "05:38", "iftar": "18:19"},
-        {"ramadan_day": 13, "weekday": "Seshanba",    "date": "3-mart",    "month": 3, "day": 3,  "saharlik": "05:37", "iftar": "18:20"},
-        {"ramadan_day": 14, "weekday": "Chorshanba",  "date": "4-mart",    "month": 3, "day": 4,  "saharlik": "05:35", "iftar": "18:21"},
-        {"ramadan_day": 15, "weekday": "Payshanba",   "date": "5-mart",    "month": 3, "day": 5,  "saharlik": "05:34", "iftar": "18:22"},
-        {"ramadan_day": 16, "weekday": "Juma",        "date": "6-mart",    "month": 3, "day": 6,  "saharlik": "05:32", "iftar": "18:23"},
-        {"ramadan_day": 17, "weekday": "Shanba",      "date": "7-mart",    "month": 3, "day": 7,  "saharlik": "05:31", "iftar": "18:24"},
-        {"ramadan_day": 18, "weekday": "Yakshanba",   "date": "8-mart",    "month": 3, "day": 8,  "saharlik": "05:29", "iftar": "18:25"},
-        {"ramadan_day": 19, "weekday": "Dushanba",    "date": "9-mart",    "month": 3, "day": 9,  "saharlik": "05:27", "iftar": "18:27"},
-        {"ramadan_day": 20, "weekday": "Seshanba",    "date": "10-mart",   "month": 3, "day": 10, "saharlik": "05:26", "iftar": "18:28"},
-        {"ramadan_day": 21, "weekday": "Chorshanba",  "date": "11-mart",   "month": 3, "day": 11, "saharlik": "05:24", "iftar": "18:29"},
-        {"ramadan_day": 22, "weekday": "Payshanba",   "date": "12-mart",   "month": 3, "day": 12, "saharlik": "05:22", "iftar": "18:30"},
-        {"ramadan_day": 23, "weekday": "Juma",        "date": "13-mart",   "month": 3, "day": 13, "saharlik": "05:21", "iftar": "18:31"},
-        {"ramadan_day": 24, "weekday": "Shanba",      "date": "14-mart",   "month": 3, "day": 14, "saharlik": "05:19", "iftar": "18:32"},
-        {"ramadan_day": 25, "weekday": "Yakshanba",   "date": "15-mart",   "month": 3, "day": 15, "saharlik": "05:17", "iftar": "18:33"},
-        {"ramadan_day": 26, "weekday": "Dushanba",    "date": "16-mart",   "month": 3, "day": 16, "saharlik": "05:15", "iftar": "18:34"},
-        {"ramadan_day": 27, "weekday": "Seshanba",    "date": "17-mart",   "month": 3, "day": 17, "saharlik": "05:14", "iftar": "18:35"},
-        {"ramadan_day": 28, "weekday": "Chorshanba",  "date": "18-mart",   "month": 3, "day": 18, "saharlik": "05:12", "iftar": "18:37"},
-        {"ramadan_day": 29, "weekday": "Payshanba",   "date": "19-mart",   "month": 3, "day": 19, "saharlik": "05:10", "iftar": "18:38"},
-        {"ramadan_day": 30, "weekday": "Juma",        "date": "20-mart",   "month": 3, "day": 20, "saharlik": "05:08", "iftar": "18:39"},
-    ]
-
-    async def fetch_ramadan_calendar(self) -> Optional[list]:
-        """Ramazon taqvimini qaytaradi (hardcoded — muslim.uz rasmiy ma'lumoti)"""
-        return self.RAMADAN_2026
-
-    def get_today_ramadan(self) -> Optional[dict]:
-        """Bugungi sana bo'yicha Ramazon kunini topadi"""
-        now = datetime.now()
-        for day in self.RAMADAN_2026:
-            if day["month"] == now.month and day["day"] == now.day:
-                return day
-        return None
-
-    def format_ramadan_today(self, prayer_data: PrayerData) -> str:
-        """Bugungi saharlik va iftar vaqtlarini chiqaradi (RAMADAN_2026 dan)"""
-        today = self.get_today_ramadan()
-
-        if not today:
-            # Ramazon oyi emas — oddiy xabar
-            return (
-                f"🌙 *Ramazon Vaqtlari*\n\n"
-                f"Hozir Ramazon oyida emasmiz.\n"
-                f"Ramazon 2026-yil *19-fevralda* boshlanadi.\n\n"
-                f"📋 To'liq taqvimni ko'rish uchun pastdagi tugmani bosing."
-            )
-
-        formatted_date = self.get_formatted_date()
-        result = (
-            f"🌙 *Ramazon Taqvimi*\n"
-            f"📅 {formatted_date}\n"
-            f"📍 {SETTINGS['default_city']} shahri\n\n"
-            f"📌 *Saharlik (og'iz yopish) — {today['saharlik']}*\n"
-            f"📌 *Iftorlik (og'iz ochish) — {today['iftar']}*\n\n"
-            f"——————————————\n\n"
-            f"✅ *Saharlik duosi:* _Navaytu an asuma sovma shahri ramazona minal fajri ilal mag'ribi, xolisan lillahi ta'ala. Allohu akbar._\n\n"
-            f"*Tarjimasi:* _Ramazon oyining ro'zasini xolis Alloh uchun subhdan to kun botguncha tutmoqni niyat qildim. Alloh buyukdir._\n\n"
-            f"✅ *Iftorlik duosi:* _Allohumma laka sumtu va bika amantu va a'layka tavakkaltu va a'la rizqika aftortu, fag'firliy ya G'offaru ma qoddamtu va ma axxortu._\n\n"
-            f"*Tarjimasi:* _Allohim, ushbu ro'zamni Sen uchun tutdim va Senga iymon keltirdim va Senga tavakkal qildim va bergan rizqing bilan iftor qildim. Yo gunohlarni kechiruvchi Zot, mening avvalgi va keyingi gunohlarimni mag'firat qilgin._\n\n"
-            f"_Ma'lumot muslim.uz rasmiy taqvimidan_"
-        )
-        return result
-
-    def format_ramadan_calendar(self, days: list) -> str:
-        """30 kunlik Ramazon taqvimini formatlaydi"""
-        if not days:
-            return "❌ Ramazon taqvimi ma'lumotlari topilmadi."
-
-        now = datetime.now()
-
-        result = (
-            f"🌙 *Ramazon Taqvimi 1447-h / 2026-m*\n"
-            f"📍 {SETTINGS['default_city']} shahri\n\n"
-        )
-
-        for day in days[:30]:
-            ram_day = str(day['ramadan_day']).zfill(2)
-            # Bugungi kunni ajratib ko'rsatish
-            is_today = (day["month"] == now.month and day["day"] == now.day)
-            marker = " ◀️ bugun" if is_today else ""
-
-            result += (
-                f"*{ram_day}.* {day['weekday']}, {day['date']}"
-                f" — 🌅`{day['saharlik']}` 🌇`{day['iftar']}`{marker}\n"
-            )
-
-        result += "\n_Ma'lumot muslim.uz rasmiy taqvimidan_"
-        return result
-
     # ========== CACHE ==========
 
     def _get_cached_data(self, key: str) -> Any:
@@ -968,11 +855,11 @@ bot = SuperUzbekBot()
 # ========== KLAVIATURA (KEYBOARD) ==========
 
 def get_main_keyboard():
-    """Xabar yozish joyida turadigan doimiy tugmalar — Ramazon tugmasi qo'shildi"""
+    """Xabar yozish joyida turadigan doimiy tugmalar"""
     keyboard = [
         [KeyboardButton("🕌 Namoz vaqti"), KeyboardButton("💵 Valyuta kursi")],
         [KeyboardButton("🌤 Ob-havo"), KeyboardButton("😷 Havo tozaligi")],
-        [KeyboardButton("🧲 Magnit bo'roni"), KeyboardButton("🌙 Ramazon-2026")]
+        [KeyboardButton("🧲 Magnit bo'roni")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
@@ -1008,17 +895,23 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer("Ma'lumot yuklanmoqda...") 
     
     if query.data == "weather_3days":
-        if bot.cached_weather_3day:
-            forecast_text = bot.cached_weather_3day
+        if not bot.cached_weather_3day:  # Cache bo'sh bo'lsa — darhol yuklaymiz
+            res = await bot.fetch_3day_forecast()
+            if res and not res.startswith("❌"):
+                bot.cached_weather_3day = res  # Faqat to'g'ri natijani saqlaymiz
+            forecast_text = res
         else:
-            forecast_text = "⚠️ Ma'lumotlar hali yuklanmadi, biroz kuting."
+            forecast_text = bot.cached_weather_3day
         await query.message.reply_text(forecast_text, parse_mode=ParseMode.MARKDOWN)
 
     elif query.data == "magnetic_3days":
-        if bot.cached_magnetic_3day:
-            forecast_text = bot.cached_magnetic_3day
+        if not bot.cached_magnetic_3day:  # Cache bo'sh bo'lsa — darhol yuklaymiz
+            res = await bot.fetch_3day_magnetic_forecast()
+            if res and not res.startswith("❌"):
+                bot.cached_magnetic_3day = res
+            forecast_text = res
         else:
-            forecast_text = "⚠️ Ma'lumotlar hali yuklanmadi, biroz kuting."
+            forecast_text = bot.cached_magnetic_3day
         await query.message.reply_text(forecast_text, parse_mode=ParseMode.MARKDOWN)
 
     elif query.data == "all_banks":
@@ -1042,20 +935,6 @@ async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("❌ Xatolik: Ro'yxat juda uzun.")
             logger.error(f"Banklar ro'yxati xato: {e}")
 
-    # ===== YANGI QO'SHILDI: 30 kunlik Ramazon taqvimi =====
-    elif query.data == "ramadan_full":
-        # Hardcoded ma'lumot — darhol chiqaradi, internet shart emas
-        days = await bot.fetch_ramadan_calendar()
-        calendar_text = bot.format_ramadan_calendar(days)
-
-        # Xabar 4096 belgidan oshmasligi uchun bo'lib yuboramiz
-        if len(calendar_text) > 4000:
-            parts = [calendar_text[i:i+4000] for i in range(0, len(calendar_text), 4000)]
-            for part in parts:
-                await query.message.reply_text(part, parse_mode=ParseMode.MARKDOWN)
-        else:
-            await query.message.reply_text(calendar_text, parse_mode=ParseMode.MARKDOWN)
-    # =======================================================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Barcha matnli xabarlarni ushlab olib, tegishli funksiyaga yo'naltiradi"""
@@ -1070,18 +949,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. Namoz
     if "Namoz" in text:
         await send_typing_action(chat_id, context)
+        if not bot.cached_prayer:  # Cache bo'sh bo'lsa (sovuq start) — darhol yuklaymiz
+            bot.cached_prayer = await bot.get_prayer_times()
         if bot.cached_prayer:
             response = bot.format_prayer_times(bot.cached_prayer)
         else:
-            response = "⚠️ Ma'lumotlar hali yuklanmadi, biroz kuting."
+            response = "⚠️ Namoz vaqtlarini hozir olishning iloji bo'lmadi (manba vaqtincha ishlamayapti). Birozdan keyin qayta urinib ko'ring."
         await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
-    
+
     # 2. Valyuta
     elif "Valyuta" in text:
+        await send_typing_action(chat_id, context)
+        if not bot.cached_currency:
+            bot.cached_currency = await bot.get_currency_rates()
         if bot.cached_currency:
             response = bot.format_currency_rates(bot.cached_currency)
         else:
-            response = "⚠️ Ma'lumotlar hali yuklanmadi, biroz kuting."
+            response = "⚠️ Valyuta kurslarini hozir olishning iloji bo'lmadi. Birozdan keyin qayta urinib ko'ring."
         currency_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🏦 Barcha banklarni ko'rish", callback_data="all_banks")]
         ])
@@ -1090,6 +974,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 3. Ob-havo
     elif "Ob-havo" in text:
         await send_typing_action(chat_id, context)
+        if not bot.cached_weather:  # Cache bo'sh bo'lsa — darhol yuklaymiz
+            bot.cached_weather = await bot.fetch_weather_data()
         if bot.cached_weather:
             data = bot.cached_weather
             formatted_date = bot.get_formatted_date()
@@ -1115,8 +1001,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
             response = bot.format_weather_data_md(w_dict)
         else:
-            response = "⚠️ Ma'lumotlar hali yuklanmadi, biroz kuting."
-        
+            response = "⚠️ Ob-havo ma'lumotini hozir olishning iloji bo'lmadi. Birozdan keyin qayta urinib ko'ring."
+
         inline_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("📅 3 kunlik ob-havoni ko'rish", callback_data="weather_3days")]
         ])
@@ -1125,49 +1011,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 4. Havo tozaligi
     elif "Havo tozaligi" in text:
         await send_typing_action(chat_id, context)
+        if not bot.cached_air:  # Cache bo'sh bo'lsa — darhol yuklaymiz
+            bot.cached_air = await bot.fetch_air_quality()
         if bot.cached_air:
             data = bot.cached_air
             rec = bot.get_recommendations(data.aqi)
             a_dict = {
-                'date': bot.get_formatted_date(), 
+                'date': bot.get_formatted_date(),
                 'location': 'Toshkent shahri',
-                'aqi': data.aqi, 
+                'aqi': data.aqi,
                 'advice': rec
             }
             response = bot.format_air_quality_md(a_dict)
         else:
-            response = "⚠️ Ma'lumotlar hali yuklanmadi, biroz kuting."
+            response = "⚠️ Havo sifati ma'lumotini hozir olishning iloji bo'lmadi. Birozdan keyin qayta urinib ko'ring."
         await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
 
     # 5. Magnit bo'roni
     elif "Magnit" in text:
         await send_typing_action(chat_id, context)
+        if not bot.cached_magnetic:  # Cache bo'sh bo'lsa — darhol yuklaymiz
+            bot.cached_magnetic = await bot.fetch_magnetic_storms()
         if bot.cached_magnetic:
             response = bot.format_magnetic_data(bot.cached_magnetic)
         else:
-            response = "⚠️ Ma'lumotlar hali yuklanmadi, biroz kuting."
+            response = "⚠️ Magnit bo'roni ma'lumotini hozir olishning iloji bo'lmadi. Birozdan keyin qayta urinib ko'ring."
         
         inline_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("📅 3 kunlik holatni ko'rish", callback_data="magnetic_3days")]
         ])
         await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN, reply_markup=inline_kb)
-
-    # ===== YANGI QO'SHILDI: 6. Ramazon =====
-    elif "Ramazon" in text:
-        await send_typing_action(chat_id, context)
-        
-        # Bugungi vaqtlar uchun cached_prayer ishlatiladi
-        if bot.cached_prayer:
-            response = bot.format_ramadan_today(bot.cached_prayer)
-        else:
-            response = "⚠️ Ma'lumotlar hali yuklanmadi, biroz kuting."
-        
-        # "To'liq taqvim" tugmasi
-        inline_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📋 To'liq taqvim (30 kun)", callback_data="ramadan_full")]
-        ])
-        await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN, reply_markup=inline_kb)
-    # ==========================================
 
     else:
         await update.message.reply_text("Iltimos, pastdagi tugmalardan birini tanlang 👇", reply_markup=get_main_keyboard())
@@ -1176,13 +1049,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def post_init(application: Application):
     try:
         await bot.create_session()
-        asyncio.create_task(bot.start_background_tasks())
+        # Fon vazifasini saqlaymiz — to'xtaganda toza bekor qilish uchun
+        bot.background_task = asyncio.create_task(bot.start_background_tasks())
         logger.info("Bot ishga tushdi va background tasklar boshlandi")
     except Exception as e:
         logger.error(f"Start error: {e}")
 
 async def post_stop(application: Application):
     try:
+        # Fon vazifasini toza bekor qilamiz ("Task was destroyed" ogohlantirishi bo'lmasligi uchun)
+        if bot.background_task and not bot.background_task.done():
+            bot.background_task.cancel()
+            try:
+                await bot.background_task
+            except asyncio.CancelledError:
+                pass
         await bot.close_session()
         logger.info("Bot to'xtadi")
     except Exception as e:

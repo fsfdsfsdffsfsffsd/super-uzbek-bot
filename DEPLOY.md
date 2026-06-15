@@ -45,20 +45,22 @@ Brauzerda ochsangiz `✅ Bot ishlayapti` chiqadi.
 
 ---
 
-## 3-bosqich. Uxlab qolmasligi uchun (MUHIM!)
+## Bot qanday ishlaydi — WEBHOOK rejimi
 
-Render bepul tarifi 15 daqiqa harakatsizlikdan keyin botni **uxlatadi**.
+Bot **webhook** rejimida ishlaydi: Telegram har bir xabarni to'g'ridan-to'g'ri
+Render manziliga yuboradi. Render bepul servisi 15 daqiqa harakatsizlikdan keyin
+uxlasa ham, **kelgan xabarning o'zi uni uyg'otadi** — tashqi ping (UptimeRobot,
+keep-alive) shart emas.
 
-Buni hal qilish uchun loyihada **GitHub Actions** keep-alive workflow'i bor
-(`.github/workflows/keep-alive.yml`). U har 10 daqiqada bot manziliga avtomatik
-ping yuboradi — qo'shimcha xizmat (UptimeRobot va h.k.) **kerak emas**.
+- Render `RENDER_EXTERNAL_URL` muhit o'zgaruvchisini avtomatik beradi → bot
+  webhook'ni o'zi o'rnatadi (`bot.py` ichida).
+- Lokal kompyuterda (`RENDER_EXTERNAL_URL` yo'q) bot **polling** rejimida ishlaydi.
 
-Workflow GitHub'ga push qilingach o'zi ishlay boshlaydi. Tekshirish:
-**GitHub repo → Actions → "Keep Render bot awake"** → "Run workflow" bilan
-qo'lda ham sinab ko'rish mumkin.
+> ℹ️ Yagona kamchilik: uzoq jimlikdan keyin **birinchi** xabarga javob ~30–50s
+> kechikadi (servis uyg'onayotgani uchun). Keyingi xabarlar tez ishlaydi.
 
-> ℹ️ Eslatma: repozitoriy 60 kun butunlay harakatsiz qolsa, GitHub jadvalli
-> workflow'larni vaqtincha o'chiradi. Faol loyihada muammo bo'lmaydi.
+`.github/workflows/keep-alive.yml` workflow'i ixtiyoriy — u vaqti-vaqti bilan
+ping yuborib sovuq startlarni kamaytiradi, lekin bot uchun shart emas.
 
 ---
 

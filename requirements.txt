@@ -2,6 +2,5 @@ python-telegram-bot[webhooks]
 aiohttp
 beautifulsoup4
 certifi
-requests
 python-dotenv
 Brotli
