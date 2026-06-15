@@ -8,8 +8,6 @@ import ssl
 import certifi
 import os
 import sys
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
 # QO'SHILDI: .env faylni o'qish uchun
 from dotenv import load_dotenv
 
@@ -1190,35 +1188,10 @@ async def post_stop(application: Application):
     except Exception as e:
         logger.error(f"Stop error: {e}")
 
-def start_health_server():
-    """Render bepul 'Web Service' uchun: ochiq port kerak (uxlab qolmaslik UptimeRobot bilan).
-    PORT muhit o'zgaruvchisi bo'lsagina ishga tushadi — lokalda ishlatilmaydi."""
-    port = int(os.getenv("PORT", "0"))
-    if not port:
-        return
-
-    class HealthHandler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.end_headers()
-            self.wfile.write("✅ Bot ishlayapti".encode("utf-8"))
-
-        def log_message(self, *args):
-            pass  # Loglarni bosib ketmasligi uchun jim
-
-    server = HTTPServer(("0.0.0.0", port), HealthHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    logger.info(f"Health-check server {port}-portda ishga tushdi")
-
-
 def main():
     if not BOT_TOKEN:
         print("BOT_TOKEN kiritilmagan!")
         return
-
-    # Render'da PORT bo'lsa, health-check serverni ishga tushiramiz
-    start_health_server()
 
     application = Application.builder().token(BOT_TOKEN).build()
 
@@ -1229,8 +1202,32 @@ def main():
     application.post_init = post_init
     application.post_stop = post_stop
 
-    print("✅ Bot ishga tushdi (1000 foydalanuvchi/soniya uchun optimallashtirildi)")
-    application.run_polling()
+    port = int(os.getenv("PORT", "0"))
+    # Render avtomatik beradigan tashqi manzil (yoki qo'lda WEBHOOK_URL)
+    webhook_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("WEBHOOK_URL")
+
+    if port and webhook_url:
+        # ===== PRODUCTION (Render): WEBHOOK rejimi =====
+        # Telegram xabarni to'g'ridan-to'g'ri shu manzilga yuboradi → uxlab yotgan
+        # servis uyg'onadi. Tashqi ping (keep-alive) shart emas.
+        webhook_url = webhook_url.rstrip("/")
+        # URL yo'li va maxfiy token uchun faqat ruxsat etilgan belgilar
+        secret_path = "".join(
+            ch for ch in BOT_TOKEN.split(":")[-1] if ch.isalnum() or ch in "-_"
+        )
+        logger.info(f"🌐 Webhook rejimida ishga tushmoqda: {webhook_url}")
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path=secret_path,
+            webhook_url=f"{webhook_url}/{secret_path}",
+            secret_token=secret_path,
+            drop_pending_updates=True,
+        )
+    else:
+        # ===== LOKAL: POLLING rejimi =====
+        print("✅ Bot lokal polling rejimida ishga tushdi")
+        application.run_polling()
 
 if __name__ == '__main__':
     main()
