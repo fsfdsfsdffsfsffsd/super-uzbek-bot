@@ -101,25 +101,17 @@ class TestSuperUzbekBot(unittest.TestCase):
 
     @patch('bot.SuperUzbekBot.fetch_with_retry', new_callable=AsyncMock)
     def test_fetch_air_quality(self, mock_fetch):
-        html = """
-        <div class="aqi-value">120</div>
-        <div class="level-name">Unhealthy for Sensitive Groups</div>
-        <div class="pollutant-name">
-            <p>PM2.5</p>
-            <p>PM2.5</p>
-            <div>45.5 µg/m³</div>
-        </div>
-        """
-        mock_fetch.return_value = html
-        
+        # Open-Meteo air-quality API JSON javobi
+        json_resp = '{"current": {"time": "2026-06-16T12:00", "interval": 3600, "us_aqi": 120}}'
+        mock_fetch.return_value = json_resp
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         result = loop.run_until_complete(self.bot.fetch_air_quality())
         loop.close()
-        
+
         self.assertIsNotNone(result)
         self.assertEqual(result.aqi, "120")
-        self.assertEqual(result.quality, "Unhealthy for Sensitive Groups")
 
     @patch('bot.SuperUzbekBot.fetch_with_retry', new_callable=AsyncMock)
     def test_fetch_weather_data(self, mock_fetch):
