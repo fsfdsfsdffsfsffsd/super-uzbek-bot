@@ -94,6 +94,7 @@ class PrayerData:
     times: Dict[PrayerTime, str]
     date: str
     hijri_date: str
+    source: str = "muslim.uz"
 
 @dataclass
 class CurrencyData:
@@ -123,6 +124,11 @@ class SuperUzbekBot:
             "?latitude=41.2995&longitude=69.2401&current=us_aqi&timezone=auto"
         )
         self.muslim_url = "https://www.muslim.uz/oz"
+        # Namoz vaqtlari zaxira manbasi — aladhan.com API (Hanafiy asr: school=1)
+        self.aladhan_url = (
+            "https://api.aladhan.com/v1/timings"
+            "?latitude=41.2995&longitude=69.2401&method=3&school=1"
+        )
         self.bank_url = "https://bank.uz/uz/currency"
         self.weather_url = "https://yandex.uz/pogoda/ru/tashkent?lat=41.330278&lon=69.337088"
         self.forecast_url = "https://yandex.uz/pogoda/ru/tashkent?lat=41.311151&lon=69.279737"
@@ -385,13 +391,26 @@ class SuperUzbekBot:
         cached_data = self._get_cached_data(cache_key)
         if cached_data: return cached_data
 
+        # 1. Asosiy manba: muslim.uz (rasmiy O'zbekiston vaqtlari)
+        result = await self._fetch_prayer_muslim()
+        # 2. Zaxira: aladhan.com (muslim.uz ishlamay qolsa)
+        if not result:
+            logger.warning("muslim.uz ishlamadi — aladhan.com zaxirasiga o'tildi")
+            result = await self._fetch_prayer_aladhan()
+
+        if result:
+            self._set_cached_data(cache_key, result)
+        return result
+
+    async def _fetch_prayer_muslim(self) -> Optional[PrayerData]:
+        """Asosiy manba — muslim.uz dan namoz vaqtlari"""
         try:
             html = await self.fetch_with_retry(self.muslim_url)
             if not html: return None
 
             soup = BeautifulSoup(html, 'html.parser')
             prayer_div = soup.find('div', id='prayer')
-            
+
             if not prayer_div:
                 header_center = soup.find('div', class_='header-center')
                 if header_center: prayer_div = header_center.find('div', id='prayer')
@@ -409,7 +428,7 @@ class SuperUzbekBot:
                 if len(elems) >= 2:
                     p_name = elems[0].get_text(strip=True)
                     p_time = elems[1].get_text(strip=True)
-                    
+
                     name_map = {
                         'Бомдод': PrayerTime.BOMDOD, 'Қуёш': PrayerTime.QUYOSH,
                         'Пешин': PrayerTime.PESHIN, 'Аср': PrayerTime.ASR,
@@ -421,17 +440,42 @@ class SuperUzbekBot:
                             break
 
             if len(prayer_times) >= 5:
-                result = PrayerData(
+                return PrayerData(
                     times=prayer_times, date=datetime.now().strftime('%d.%m.%Y'),
-                    hijri_date=self.get_hijri_date()
+                    hijri_date=self.get_hijri_date(), source="muslim.uz"
                 )
-                self._set_cached_data(cache_key, result)
-                return result
             return None
         except Exception as e:
-            logger.error(f"Namoz vaqtlari xato: {str(e)}")
+            logger.error(f"Namoz vaqtlari xato (muslim.uz): {str(e)}")
             return None
-    
+
+    async def _fetch_prayer_aladhan(self) -> Optional[PrayerData]:
+        """Zaxira manba — aladhan.com API (Toshkent, Hanafiy asr)"""
+        try:
+            raw = await self.fetch_with_retry(self.aladhan_url)
+            if not raw: return None
+
+            d = json.loads(raw)
+            t = d['data']['timings']
+            # Vaqtlar ba'zan "05:00 (+05)" ko'rinishida keladi — birinchi qismini olamiz
+            def clean(x): return x.split(' ')[0].strip()
+
+            times = {
+                PrayerTime.BOMDOD: clean(t['Fajr']),
+                PrayerTime.QUYOSH: clean(t['Sunrise']),
+                PrayerTime.PESHIN: clean(t['Dhuhr']),
+                PrayerTime.ASR: clean(t['Asr']),
+                PrayerTime.SHOM: clean(t['Maghrib']),
+                PrayerTime.XUFTON: clean(t['Isha']),
+            }
+            return PrayerData(
+                times=times, date=datetime.now().strftime('%d.%m.%Y'),
+                hijri_date=self.get_hijri_date(), source="aladhan.com"
+            )
+        except Exception as e:
+            logger.error(f"Namoz vaqtlari xato (aladhan): {str(e)}")
+            return None
+
     def format_prayer_times(self, data: PrayerData) -> str:
         if not data: return "❌ Namoz vaqtlarini olishda xatolik yuz berdi"
         formatted_date = self.get_formatted_date()
@@ -448,7 +492,8 @@ class SuperUzbekBot:
         for p_enum, p_name, emoji in order:
             time_str = data.times.get(p_enum, "N/A")
             result += f"{emoji} *{p_name}:* {time_str}\n"
-        result += "\n_Ma'lumot muslim.uz saytidan olindi_"
+        source = getattr(data, "source", "muslim.uz")
+        result += f"\n_Ma'lumot {source} dan olindi_"
         return result
 
     # ========== VALYUTA KURSLARI ==========
