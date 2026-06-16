@@ -1103,7 +1103,9 @@ def main():
             url_path=secret_path,
             webhook_url=f"{webhook_url}/{secret_path}",
             secret_token=secret_path,
-            drop_pending_updates=True,
+            # MUHIM: False — servis uxlab uyg'onganda, uni uyg'otgan xabar
+            # navbatdan o'chirilmasin (aks holda 1-xabarga javob kelmaydi).
+            drop_pending_updates=False,
         )
     else:
         # ===== LOKAL: POLLING rejimi =====
