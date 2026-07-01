@@ -47,6 +47,9 @@ SOURCE_CHANNEL=@ManbaKanal
 DEST_CHANNEL=@AvtoMashinaBozorElonlar
 TELETHON_SESSION=export_session.py chiqargan uzun qiymat
 NEW_LINK=https://t.me/AvtoMashinaBozorElonlar
+CATCHUP_LIMIT=50
+DEST_SCAN_LIMIT=1500
+CATCHUP_INTERVAL_SECONDS=300
 ```
 
 Start command:
@@ -59,6 +62,24 @@ Render/Heroku-style serverlar uchun `Procfile` ham qo'shilgan:
 
 ```text
 worker: python userbot.py
+```
+
+## Uxlab qolgan postlarni tutib olish
+
+`userbot.py` ishga tushganda manba kanalning oxirgi `CATCHUP_LIMIT` ta xabarini tekshiradi va yuborilmaganlarini yuboradi. Keyin har `CATCHUP_INTERVAL_SECONDS` sekundda yana tekshiradi.
+
+Destination kanalga yuborilgan postlarga ko'rinmaydigan marker qo'shiladi. Shu marker orqali bot restart/deploydan keyin ham qaysi source post qaysi destination postga ketganini tiklaydi va reply xabarlarni o'sha destination postga reply qilib yuboradi.
+
+Qo'lda sync qilish uchun:
+
+```text
+https://SERVER-URL.onrender.com/sync
+```
+
+Agar `SYNC_TOKEN` env qo'ysangiz, sync URL shunday bo'ladi:
+
+```text
+https://SERVER-URL.onrender.com/sync?token=SYNC_TOKEN_QIYMATI
 ```
 
 ## Muhim

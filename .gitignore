@@ -2,5 +2,6 @@
 *.session-journal
 .env
 sent_posts_history.txt
+post_state.json
 __pycache__/
 *.pyc
