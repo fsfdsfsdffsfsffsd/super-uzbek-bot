@@ -16,5 +16,6 @@ jobs:
         run: |
           echo "Ping yuborilmoqda: $(date -u)"
           curl -sS -m 60 https://super-uzbek-bot.onrender.com/ || true
+          curl -sS -m 60 https://super-uzbek-bot-1.onrender.com/sync || true
           echo ""
           echo "Tayyor."
