@@ -1,0 +1,6 @@
+*.session
+*.session-journal
+.env
+sent_posts_history.txt
+__pycache__/
+*.pyc
