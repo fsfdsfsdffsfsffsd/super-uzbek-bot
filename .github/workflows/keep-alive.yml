@@ -13,9 +13,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Ping bot
+        env:
+          AVTOELON_SYNC_TOKEN: ${{ secrets.AVTOELON_SYNC_TOKEN }}
         run: |
           echo "Ping yuborilmoqda: $(date -u)"
           curl -sS -m 60 https://super-uzbek-bot.onrender.com/ || true
-          curl -sS -m 60 https://super-uzbek-bot-1.onrender.com/sync || true
+          curl -sS -m 60 https://super-uzbek-bot-1.onrender.com/ || true
+          if [ -n "$AVTOELON_SYNC_TOKEN" ]; then
+            curl -sS -m 60 "https://super-uzbek-bot-1.onrender.com/sync?token=${AVTOELON_SYNC_TOKEN}" || true
+          else
+            echo "AVTOELON_SYNC_TOKEN secret topilmadi; faqat wake ping yuborildi."
+          fi
           echo ""
           echo "Tayyor."
