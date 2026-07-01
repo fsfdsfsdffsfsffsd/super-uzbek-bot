@@ -46,7 +46,9 @@ API_HASH=api_hash_bu_yerga
 SOURCE_CHANNEL=@ManbaKanal
 DEST_CHANNEL=@AvtoMashinaBozorElonlar
 TELETHON_SESSION=export_session.py chiqargan uzun qiymat
+SYNC_TOKEN=uzun_tasodifiy_maxfiy_matn
 NEW_LINK=https://t.me/AvtoMashinaBozorElonlar
+ALLOW_PUBLIC_SYNC=false
 CATCHUP_LIMIT=50
 DEST_SCAN_LIMIT=1500
 CATCHUP_INTERVAL_SECONDS=300
@@ -70,17 +72,21 @@ worker: python userbot.py
 
 Destination kanalga yuborilgan postlarga ko'rinmaydigan marker qo'shiladi. Shu marker orqali bot restart/deploydan keyin ham qaysi source post qaysi destination postga ketganini tiklaydi va reply xabarlarni o'sha destination postga reply qilib yuboradi.
 
-Qo'lda sync qilish uchun:
-
-```text
-https://SERVER-URL.onrender.com/sync
-```
-
-Agar `SYNC_TOKEN` env qo'ysangiz, sync URL shunday bo'ladi:
+Qo'lda sync qilish uchun `SYNC_TOKEN` kerak:
 
 ```text
 https://SERVER-URL.onrender.com/sync?token=SYNC_TOKEN_QIYMATI
 ```
+
+Statusni ko'rish uchun ham token kerak:
+
+```text
+https://SERVER-URL.onrender.com/status?token=SYNC_TOKEN_QIYMATI
+```
+
+GitHub Actions orqali keep-alive sync ishlashi uchun GitHub repo sozlamalarida
+`AVTOELON_SYNC_TOKEN` nomli secret oching va Render'dagi `SYNC_TOKEN` bilan bir
+xil qiymat kiriting. Tokenni kodga yozmang.
 
 ## Muhim
 

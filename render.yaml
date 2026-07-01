@@ -16,8 +16,12 @@ services:
         sync: false
       - key: TELETHON_SESSION
         sync: false
+      - key: SYNC_TOKEN
+        sync: false
       - key: NEW_LINK
         value: https://t.me/AvtoMashinaBozorElonlar
+      - key: ALLOW_PUBLIC_SYNC
+        value: false
       - key: CATCHUP_LIMIT
         value: 50
       - key: DEST_SCAN_LIMIT

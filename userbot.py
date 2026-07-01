@@ -36,6 +36,11 @@ CATCHUP_LIMIT = int(os.environ.get("CATCHUP_LIMIT", "50"))
 DEST_SCAN_LIMIT = int(os.environ.get("DEST_SCAN_LIMIT", "1500"))
 CATCHUP_INTERVAL_SECONDS = int(os.environ.get("CATCHUP_INTERVAL_SECONDS", "300"))
 SYNC_TOKEN = os.environ.get("SYNC_TOKEN")
+ALLOW_PUBLIC_SYNC = os.environ.get("ALLOW_PUBLIC_SYNC", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 
 # Telegram caption limit is 1024; text message limit is 4096.
 MAX_CAPTION_LENGTH = 1024
@@ -471,17 +476,31 @@ async def periodic_catch_up(sync_callback) -> None:
 
 
 async def health_check(request: web.Request) -> web.Response:
-    return web.Response(
-        text=(
-            "Avtoelon userbot ishlayapti\n"
-            f"sent={len(SENT_POSTS)}\n"
-            f"mapped={len(POST_MAP)}\n"
-        )
+    return web.Response(text="Avtoelon userbot ishlayapti\n")
+
+
+def is_authorized(request: web.Request) -> bool:
+    token = request.query.get("token") or request.headers.get("X-Sync-Token")
+    if SYNC_TOKEN:
+        return token == SYNC_TOKEN
+    return ALLOW_PUBLIC_SYNC
+
+
+async def status_check(request: web.Request) -> web.Response:
+    if not is_authorized(request):
+        return web.Response(status=403, text="Forbidden")
+
+    return web.json_response(
+        {
+            "ok": True,
+            "sent": len(SENT_POSTS),
+            "mapped": len(POST_MAP),
+        }
     )
 
 
 async def sync_check(request: web.Request) -> web.Response:
-    if SYNC_TOKEN and request.query.get("token") != SYNC_TOKEN:
+    if not is_authorized(request):
         return web.Response(status=403, text="Forbidden")
 
     sync_callback = request.app.get("sync_callback")
@@ -500,6 +519,7 @@ async def start_health_server(sync_callback):
     app = web.Application()
     app["sync_callback"] = sync_callback
     app.router.add_get("/", health_check)
+    app.router.add_get("/status", status_check)
     app.router.add_get("/sync", sync_check)
     runner = web.AppRunner(app)
     await runner.setup()
