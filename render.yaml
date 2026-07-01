@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: avtoelon-userbot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python userbot.py
+    envVars:
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: SOURCE_CHANNEL
+        sync: false
+      - key: DEST_CHANNEL
+        sync: false
+      - key: TELETHON_SESSION
+        sync: false
+      - key: NEW_LINK
+        value: https://t.me/AvtoMashinaBozorElonlar
+      - key: PYTHON_VERSION
+        value: 3.12.7

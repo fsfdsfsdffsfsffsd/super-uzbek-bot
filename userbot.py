@@ -4,6 +4,7 @@ import os
 import re
 from typing import Iterable, Optional
 
+from aiohttp import web
 from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
 from telethon.sessions import StringSession
@@ -82,6 +83,25 @@ def parse_chat_ref(value: str):
     if value.lstrip("-").isdigit():
         return int(value)
     return value
+
+
+async def health_check(request: web.Request) -> web.Response:
+    return web.Response(text="Avtoelon userbot ishlayapti")
+
+
+async def start_health_server():
+    port = os.environ.get("PORT")
+    if not port:
+        return None
+
+    app = web.Application()
+    app.router.add_get("/", health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", int(port))
+    await site.start()
+    logger.info("Health-check server 0.0.0.0:%s portda ishga tushdi.", port)
+    return runner
 
 
 async def send_with_retry(send_func, *args, **kwargs):
@@ -206,6 +226,7 @@ async def main() -> None:
     DEST_CHANNEL = parse_chat_ref(dest_channel)
     session = StringSession(TELETHON_SESSION) if TELETHON_SESSION else SESSION_NAME
     client = TelegramClient(session, api_id, api_hash)
+    health_runner = await start_health_server()
 
     @client.on(events.Album(chats=source_ref))
     async def album_listener(event: events.Album.Event) -> None:
@@ -231,6 +252,8 @@ async def main() -> None:
         len(SENT_POSTS),
     )
     await client.run_until_disconnected()
+    if health_runner:
+        await health_runner.cleanup()
 
 
 if __name__ == "__main__":
