@@ -47,14 +47,11 @@ SOURCE_CHANNEL=@ManbaKanal
 DEST_CHANNEL=@AvtoMashinaBozorElonlar
 TELETHON_SESSION=export_session.py chiqargan uzun qiymat
 SYNC_TOKEN=uzun_tasodifiy_maxfiy_matn
-STATE_CHANNEL=@PrivateStateKanalYokiId
 NEW_LINK=https://t.me/AvtoMashinaBozorElonlar
 ALLOW_PUBLIC_SYNC=false
 CATCHUP_LIMIT=500
 SKIP_REPLIES=true
 DEST_SCAN_LIMIT=1500
-STATE_SCAN_LIMIT=50
-STATE_MAP_LIMIT=100
 CATCHUP_INTERVAL_SECONDS=300
 START_FROM_SOURCE_ID=0
 ```
@@ -73,15 +70,13 @@ worker: python userbot.py
 
 ## Uxlab qolgan postlarni tutib olish
 
-Bu bepul variantda eng yaxshi yo'l: Telegram ichida alohida private state kanal oching, user akkauntingizni admin qiling va `STATE_CHANNEL` env qiymatiga shu kanal username yoki ID sini kiriting. Bot `last_source_id` va so'nggi reply mappinglarni shu kanalga compact JSON xabar qilib yozadi. Render free restart/redeploy paytida local fayllar yo'qolsa ham, bot avval shu private state kanaldan tiklanadi.
+Bu bepul variantda bot faqat aniq state bilan ishlaydi: local `post_state.json`, `sent_posts_history.txt` va destination kanalga qo'shilgan ko'rinmas markerlar. Render free restart/redeploy paytida local fayllar yo'qolsa, bot destination marker scan orqali oxirgi source ID ni tiklaydi.
 
-`STATE_CHANNEL` qo'yilmasa, bot local `post_state.json`, `sent_posts_history.txt` va destination kanal markerlari orqali tiklanadi. Bu ham bepul, lekin Render free local fayllari yo'qolishi mumkinligi sabab state kanal tavsiya qilinadi.
+Marker ham topilmasa, bot source kanalning hozirgi oxirgi postini baseline qiladi va eski postlarni yubormaydi. Bu shubhali backlogni tashlab yuborishi mumkin, lekin 7 kun oldingi noto'g'ri postni yuborishdan xavfsizroq.
 
-`userbot.py` ishga tushganda avval private state kanaldan, keyin history/state fayllaridan, keyin destination kanal markerlaridan oxirgi source message ID (`last_source_id`) ni tiklaydi. Marker bo'lmasa, destination va source post matnlarini fingerprint orqali solishtirib chegarani topishga urinadi. Keyin manba kanalda faqat shu ID'dan keyin chiqqan xabarlarni tartib bilan tekshiradi va yuborilmaganlarini yuboradi.
+`userbot.py` ishga tushganda avval history/state fayllaridan, keyin destination kanal markerlaridan oxirgi source message ID (`last_source_id`) ni tiklaydi. Keyin manba kanalda faqat shu ID'dan keyin chiqqan xabarlarni tartib bilan tekshiradi va yuborilmaganlarini yuboradi.
 
-`CATCHUP_LIMIT=500` fingerprint orqali chegarani topish va oxirgi yangi xabarlarni tekshirish uchun ishlatiladi. Bot `last_source_id`dan eski postlarni yubormaydi, shuning uchun 7 kun oldingi eski postga qaytib ketmasligi kerak. Agar bot hech qanday ishonchli state topa olmasa, eski postlarni qayta yubormaslik uchun hozirgi oxirgi source postni baseline qilib oladi.
-
-`STATE_MAP_LIMIT=100` state kanalga yoziladigan so'nggi reply mappinglar soni. Telegram text limiti oshib ketsa bot mappingni avtomatik qisqartiradi. `last_source_id` baribir saqlanadi.
+`CATCHUP_LIMIT=500` oxirgi yangi xabarlarni qo'shimcha tekshirish uchun ishlatiladi, lekin bot `last_source_id`dan eski postlarni hech qachon yubormaydi. Matn o'xshashligi yoki fingerprint orqali "taxminiy oxirgi post" tanlanmaydi.
 
 Agar eski marker/state yo'qolgan bo'lsa yoki bot noto'g'ri yuqori ID saqlab qo'ygan bo'lsa, serverda `START_FROM_SOURCE_ID` qiymatini oxirgi to'g'ri yuborilgan source message ID qilib qo'ying. Bu qiymat qo'lda berilgan override hisoblanadi va history/state'dagi `last_source_id`dan ustun turadi. Masalan oxirgi to'g'ri yuborilgan source post ID `96995` bo'lsa:
 
@@ -118,5 +113,4 @@ Workflow har 5 daqiqada `/sync` endpointni chaqiradi. Bu Render free web servisi
 
 - Sizning user akkauntingiz manba kanalni ko'ra olishi kerak.
 - Destination kanalga post qilish uchun akkauntingiz admin yoki post yozish huquqiga ega bo'lishi kerak.
-- `STATE_CHANNEL` ishlatmoqchi bo'lsangiz, private kanalga faqat bot ishlatayotgan user akkaunt admin bo'lsin; u yerdagi state xabarlarini o'chirmang.
 - `userbot_session.session` faylini hech kimga bermang. U akkauntingiz session kaliti hisoblanadi.

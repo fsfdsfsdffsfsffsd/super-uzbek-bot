@@ -18,8 +18,6 @@ services:
         sync: false
       - key: SYNC_TOKEN
         sync: false
-      - key: STATE_CHANNEL
-        sync: false
       - key: NEW_LINK
         value: https://t.me/AvtoMashinaBozorElonlar
       - key: ALLOW_PUBLIC_SYNC
@@ -30,10 +28,6 @@ services:
         value: true
       - key: DEST_SCAN_LIMIT
         value: 1500
-      - key: STATE_SCAN_LIMIT
-        value: 50
-      - key: STATE_MAP_LIMIT
-        value: 100
       - key: CATCHUP_INTERVAL_SECONDS
         value: 300
       - key: START_FROM_SOURCE_ID
