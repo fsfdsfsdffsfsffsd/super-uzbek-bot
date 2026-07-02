@@ -574,7 +574,7 @@ async def sync_check(request: web.Request) -> web.Response:
     return web.Response(text=f"Sync tugadi. Yangi yuborilgan: {sent_count}\n")
 
 
-async def start_health_server(sync_callback):
+async def start_health_server(sync_callback=None):
     port = os.environ.get("PORT")
     if not port:
         return None
@@ -590,6 +590,20 @@ async def start_health_server(sync_callback):
     await site.start()
     logger.info("Health-check server 0.0.0.0:%s portda ishga tushdi.", port)
     return runner
+
+
+async def start_telegram_client(client: TelegramClient) -> None:
+    logger.info("Telegram client ulanmoqda...")
+    if TELETHON_SESSION:
+        await client.connect()
+        if not await client.is_user_authorized():
+            raise RuntimeError(
+                "TELETHON_SESSION yaroqsiz yoki eskirgan. Lokal kompyuterda "
+                "export_session.py bilan yangi session yarating va Render env'ni yangilang."
+            )
+    else:
+        await client.start()
+    logger.info("Telegram client ulandi va session tasdiqlandi.")
 
 
 def require_env() -> tuple[int, str, str, str]:
@@ -627,6 +641,8 @@ async def main() -> None:
     DEST_CHANNEL = parse_chat_ref(dest_channel)
     session = StringSession(TELETHON_SESSION) if TELETHON_SESSION else SESSION_NAME
     client = TelegramClient(session, api_id, api_hash)
+    health_runner = await start_health_server()
+    periodic_task = None
 
     @client.on(events.Album(chats=source_ref))
     async def album_listener(event: events.Album.Event) -> None:
@@ -644,18 +660,23 @@ async def main() -> None:
         except Exception as error:
             logger.exception("Post yuborishda xatolik: %s", error)
 
-    await client.start()
+    await start_telegram_client(client)
+    logger.info("Source kanal entity olinmoqda: %s", source_channel)
     source_entity = await client.get_entity(source_ref)
     SOURCE_CHAT_ID = get_peer_id(source_entity)
+    logger.info("Source kanal topildi: %s -> %s", source_channel, SOURCE_CHAT_ID)
 
+    logger.info("Destination marker scan boshlanmoqda: limit=%s", DEST_SCAN_LIMIT)
     await rebuild_state_from_destination(client)
 
     async def sync_callback() -> int:
         return await catch_up_recent(client, source_ref)
 
-    health_runner = await start_health_server(sync_callback)
+    if health_runner:
+        health_runner.app["sync_callback"] = sync_callback
     periodic_task = asyncio.create_task(periodic_catch_up(sync_callback))
 
+    logger.info("Startup catch-up boshlanmoqda...")
     await sync_callback()
     logger.info(
         "Userbot ishga tushdi. Manba: %s (%s), kanal: %s, xotirada: %s ta post, last_source_id=%s.",
@@ -669,7 +690,8 @@ async def main() -> None:
     try:
         await client.run_until_disconnected()
     finally:
-        periodic_task.cancel()
+        if periodic_task:
+            periodic_task.cancel()
         if health_runner:
             await health_runner.cleanup()
 
