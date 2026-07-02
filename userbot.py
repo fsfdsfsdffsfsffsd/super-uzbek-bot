@@ -26,16 +26,34 @@ API_HASH = os.environ.get("API_HASH")
 SOURCE_CHANNEL = os.environ.get("SOURCE_CHANNEL")
 DEST_CHANNEL = os.environ.get("DEST_CHANNEL", "@AvtoMashinaBozorElonlar")
 
+
+def read_int_env(name: str, default: int, min_value: Optional[int] = None) -> int:
+    raw_value = os.environ.get(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError as error:
+        raise SystemExit(f"{name} butun son bo'lishi kerak: {raw_value!r}") from error
+    if min_value is not None:
+        return max(min_value, value)
+    return value
+
+
 SESSION_NAME = os.environ.get("SESSION_NAME", "userbot_session")
 TELETHON_SESSION = os.environ.get("TELETHON_SESSION")
 NEW_LINK = os.environ.get("NEW_LINK", "https://t.me/AvtoMashinaBozorElonlar")
 
 HISTORY_FILE = os.environ.get("HISTORY_FILE", "sent_posts_history.txt")
 STATE_FILE = os.environ.get("STATE_FILE", "post_state.json")
-CATCHUP_LIMIT = max(500, int(os.environ.get("CATCHUP_LIMIT", "500")))
-DEST_SCAN_LIMIT = int(os.environ.get("DEST_SCAN_LIMIT", "1500"))
-CATCHUP_INTERVAL_SECONDS = int(os.environ.get("CATCHUP_INTERVAL_SECONDS", "300"))
+CATCHUP_LIMIT = read_int_env("CATCHUP_LIMIT", 500, min_value=1)
+DEST_SCAN_LIMIT = read_int_env("DEST_SCAN_LIMIT", 1500, min_value=1)
+STATE_SCAN_LIMIT = read_int_env("STATE_SCAN_LIMIT", 50, min_value=1)
+STATE_MAP_LIMIT = read_int_env("STATE_MAP_LIMIT", 100, min_value=0)
+CATCHUP_INTERVAL_SECONDS = read_int_env("CATCHUP_INTERVAL_SECONDS", 300, min_value=1)
+START_FROM_SOURCE_ID = read_int_env("START_FROM_SOURCE_ID", 0, min_value=0)
 SYNC_TOKEN = os.environ.get("SYNC_TOKEN")
+STATE_CHANNEL = os.environ.get("STATE_CHANNEL")
 ALLOW_PUBLIC_SYNC = os.environ.get("ALLOW_PUBLIC_SYNC", "false").lower() in {
     "1",
     "true",
@@ -70,6 +88,7 @@ MARKER_RE = re.compile(
     + f"([{re.escape(ZERO)}{re.escape(ONE)}]+)"
     + re.escape(MARKER_END)
 )
+STATE_MESSAGE_PREFIX = "AVTOELON_USERBOT_STATE_V1"
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -110,19 +129,23 @@ def save_many_to_history(unique_ids: Iterable[str]) -> None:
             file.write(f"{unique_id}\n")
 
 
+def parse_state_data(data: dict) -> tuple[set[str], dict[str, int], int]:
+    sent = {str(item) for item in data.get("sent", [])}
+    post_map = {
+        str(source_id): int(dest_id)
+        for source_id, dest_id in data.get("post_map", {}).items()
+    }
+    last_source_id = int(data.get("last_source_id", 0))
+    return sent, post_map, last_source_id
+
+
 def load_state() -> tuple[set[str], dict[str, int], int]:
     if not os.path.exists(STATE_FILE):
         return set(), {}, 0
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as file:
             data = json.load(file)
-        sent = {str(item) for item in data.get("sent", [])}
-        post_map = {
-            str(source_id): int(dest_id)
-            for source_id, dest_id in data.get("post_map", {}).items()
-        }
-        last_source_id = int(data.get("last_source_id", 0))
-        return sent, post_map, last_source_id
+        return parse_state_data(data)
     except Exception as error:
         logger.warning("State fayl o'qilmadi, yangidan boshlanadi: %s", error)
         return set(), {}, 0
@@ -132,20 +155,197 @@ STATE_SENT, POST_MAP, LAST_SOURCE_ID = load_state()
 SENT_POSTS = load_history() | STATE_SENT | set(POST_MAP)
 
 
-def save_state() -> None:
-    data = {
+def build_state_data() -> dict:
+    return {
         "sent": sorted(SENT_POSTS),
         "post_map": POST_MAP,
         "last_source_id": LAST_SOURCE_ID,
     }
+
+
+def recent_post_map(limit: int) -> dict[str, int]:
+    if limit <= 0:
+        return {}
+
+    items = list(POST_MAP.items())
+    if SOURCE_CHAT_ID is not None:
+        items.sort(
+            key=lambda item: extract_source_id(item[0], SOURCE_CHAT_ID) or 0,
+            reverse=True,
+        )
+    else:
+        items.reverse()
+    return dict(items[:limit])
+
+
+def build_telegram_state_data(map_limit: int = STATE_MAP_LIMIT) -> dict:
+    return {
+        "sent": [],
+        "post_map": recent_post_map(map_limit),
+        "last_source_id": LAST_SOURCE_ID,
+    }
+
+
+def save_state() -> None:
+    data = build_state_data()
     tmp_file = f"{STATE_FILE}.tmp"
     with open(tmp_file, "w", encoding="utf-8") as file:
         json.dump(data, file, ensure_ascii=False, separators=(",", ":"))
     os.replace(tmp_file, STATE_FILE)
 
 
+def state_message_text() -> str:
+    map_limit = STATE_MAP_LIMIT
+    while map_limit >= 0:
+        text = (
+            STATE_MESSAGE_PREFIX
+            + "\n"
+            + json.dumps(
+                build_telegram_state_data(map_limit),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
+        if len(text) <= MAX_TEXT_LENGTH or map_limit == 0:
+            return text
+        map_limit //= 2
+
+    return STATE_MESSAGE_PREFIX + "\n" + json.dumps(
+        {"sent": [], "post_map": {}, "last_source_id": LAST_SOURCE_ID},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def state_message_summary() -> str:
+    data = build_telegram_state_data()
+    return f"last_source_id={data['last_source_id']}, mapped={len(data['post_map'])}"
+
+
+def parse_state_message(text: Optional[str]) -> Optional[dict]:
+    if not text or not text.startswith(STATE_MESSAGE_PREFIX):
+        return None
+    _, _, payload = text.partition("\n")
+    if not payload:
+        return None
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError:
+        logger.warning("Telegram state xabari JSON sifatida o'qilmadi")
+        return None
+
+
+def apply_state_data(data: dict, reason: str) -> None:
+    global POST_MAP, LAST_SOURCE_ID, SENT_POSTS
+
+    sent, post_map, last_source_id = parse_state_data(data)
+    before_sent = len(SENT_POSTS)
+    SENT_POSTS |= sent | set(post_map)
+    POST_MAP.update(post_map)
+    if last_source_id > LAST_SOURCE_ID:
+        LAST_SOURCE_ID = last_source_id
+    logger.info(
+        "State tiklandi (%s): sent=%s->%s, mapped=%s, last_source_id=%s.",
+        reason,
+        before_sent,
+        len(SENT_POSTS),
+        len(POST_MAP),
+        LAST_SOURCE_ID,
+    )
+
+
+async def load_state_from_telegram(client) -> bool:
+    if not STATE_CHANNEL:
+        return False
+
+    state_ref = parse_chat_ref(STATE_CHANNEL)
+    scanned = 0
+    async for message in client.iter_messages(state_ref, limit=STATE_SCAN_LIMIT):
+        scanned += 1
+        data = parse_state_message(message.message or "")
+        if data is None:
+            continue
+        apply_state_data(data, "telegram state channel")
+        save_state()
+        logger.info("Telegram state topildi: scanned=%s, message_id=%s.", scanned, message.id)
+        return True
+
+    logger.warning(
+        "STATE_CHANNEL berilgan, lekin oxirgi %s xabar ichida state topilmadi.",
+        STATE_SCAN_LIMIT,
+    )
+    return False
+
+
+async def save_state_to_telegram(client) -> None:
+    if not STATE_CHANNEL:
+        return
+
+    try:
+        await client.send_message(
+            parse_chat_ref(STATE_CHANNEL),
+            state_message_text(),
+            parse_mode=None,
+            link_preview=False,
+        )
+    except Exception as error:
+        logger.exception("Telegram state kanalga yozilmadi: %s", error)
+
+
 def build_unique_id(chat_id: int, message_id: int) -> str:
     return f"{chat_id}_{message_id}"
+
+
+def extract_source_id(unique_id: str, chat_id: int) -> Optional[int]:
+    prefix = f"{chat_id}_"
+    if not unique_id.startswith(prefix):
+        return None
+    try:
+        return int(unique_id[len(prefix) :])
+    except ValueError:
+        return None
+
+
+def max_known_source_id(chat_id: int) -> int:
+    max_id = 0
+    for unique_id in SENT_POSTS | set(POST_MAP):
+        source_id = extract_source_id(unique_id, chat_id)
+        if source_id is not None:
+            max_id = max(max_id, source_id)
+    return max_id
+
+
+def set_last_source_id(source_id: int, reason: str) -> bool:
+    global LAST_SOURCE_ID
+
+    source_id = int(source_id)
+    if source_id == LAST_SOURCE_ID:
+        return False
+    old_source_id = LAST_SOURCE_ID
+    LAST_SOURCE_ID = source_id
+    logger.info(
+        "last_source_id belgilandi: %s -> %s (%s)",
+        old_source_id,
+        LAST_SOURCE_ID,
+        reason,
+    )
+    return True
+
+
+def advance_last_source_id(source_id: int, reason: str) -> bool:
+    if source_id <= LAST_SOURCE_ID:
+        return False
+    return set_last_source_id(source_id, reason)
+
+
+def restore_last_source_id_from_known_state(chat_id: int) -> None:
+    if START_FROM_SOURCE_ID > 0:
+        if set_last_source_id(START_FROM_SOURCE_ID, "START_FROM_SOURCE_ID env override"):
+            save_state()
+        return
+
+    if advance_last_source_id(max_known_source_id(chat_id), "history/state"):
+        save_state()
 
 
 def has_file_media(message) -> bool:
@@ -254,8 +454,25 @@ def get_reply_dest_id(chat_id: int, messages: list) -> Optional[int]:
     return None
 
 
+def remember_source_only(chat_id: int, source_ids: list[int]) -> None:
+    new_unique_ids: list[str] = []
+    for source_id in source_ids:
+        unique_id = build_unique_id(chat_id, source_id)
+        if unique_id not in SENT_POSTS:
+            new_unique_ids.append(unique_id)
+        SENT_POSTS.add(unique_id)
+
+    remember_source_seen(chat_id, source_ids)
+    if new_unique_ids:
+        save_many_to_history(new_unique_ids)
+    save_state()
+
+
 def remember_mapping(chat_id: int, source_ids: list[int], dest_messages: list) -> None:
-    if not source_ids or not dest_messages:
+    if not source_ids:
+        return
+    if not dest_messages:
+        remember_source_only(chat_id, source_ids)
         return
 
     new_unique_ids: list[str] = []
@@ -313,6 +530,7 @@ async def process_single_message(client, chat_id: int, message, from_catchup: bo
         if unique_id in SENT_POSTS:
             remember_source_seen(chat_id, source_ids)
             save_state()
+            await save_state_to_telegram(client)
             logger.info("Dublikat o'tkazib yuborildi: %s", unique_id)
             return False
 
@@ -321,6 +539,7 @@ async def process_single_message(client, chat_id: int, message, from_catchup: bo
             remember_source_seen(chat_id, source_ids)
             save_to_history(unique_id)
             save_state()
+            await save_state_to_telegram(client)
             logger.info("Reply post o'tkazib yuborildi: %s", unique_id)
             return False
 
@@ -330,18 +549,11 @@ async def process_single_message(client, chat_id: int, message, from_catchup: bo
             remember_source_seen(chat_id, source_ids)
             save_to_history(unique_id)
             save_state()
+            await save_state_to_telegram(client)
             logger.info("Bo'sh/service xabar o'tkazib yuborildi: %s", unique_id)
             return False
 
         fingerprint = text_fingerprint(text)
-        if from_catchup and fingerprint and fingerprint in DEST_TEXT_FINGERPRINTS:
-            SENT_POSTS.add(unique_id)
-            remember_source_seen(chat_id, source_ids)
-            save_to_history(unique_id)
-            save_state()
-            logger.info("Oldin yuborilgan post fingerprint orqali tanildi: %s", unique_id)
-            return False
-
         marker = encode_marker(chat_id, source_ids)
         reply_to = get_reply_dest_id(chat_id, [message])
 
@@ -368,6 +580,7 @@ async def process_single_message(client, chat_id: int, message, from_catchup: bo
 
         dest_messages = normalize_sent_messages(result)
         remember_mapping(chat_id, source_ids, dest_messages)
+        await save_state_to_telegram(client)
         if fingerprint:
             DEST_TEXT_FINGERPRINTS.add(fingerprint)
         logger.info("Yangi post yuborildi: %s", unique_id)
@@ -380,10 +593,10 @@ async def process_album_messages(client, chat_id: int, messages: list, from_catc
     unique_ids = [build_unique_id(chat_id, message_id) for message_id in source_ids]
 
     async with PROCESS_LOCK:
-        if all(unique_id in SENT_POSTS for unique_id in unique_ids):
-            remember_source_seen(chat_id, source_ids)
-            save_state()
-            logger.info("Album dublikati o'tkazib yuborildi: %s", unique_ids[0])
+        if any(unique_id in SENT_POSTS for unique_id in unique_ids):
+            remember_source_only(chat_id, source_ids)
+            await save_state_to_telegram(client)
+            logger.info("Album to'liq yoki qisman dublikat, o'tkazib yuborildi: %s", unique_ids[0])
             return False
 
         if SKIP_REPLIES and any(is_reply_message(message) for message in messages):
@@ -391,6 +604,7 @@ async def process_album_messages(client, chat_id: int, messages: list, from_catc
             remember_source_seen(chat_id, source_ids)
             save_many_to_history(unique_ids)
             save_state()
+            await save_state_to_telegram(client)
             logger.info("Reply album o'tkazib yuborildi: %s", unique_ids[0])
             return False
 
@@ -402,18 +616,11 @@ async def process_album_messages(client, chat_id: int, messages: list, from_catc
             remember_source_seen(chat_id, source_ids)
             save_many_to_history(unique_ids)
             save_state()
+            await save_state_to_telegram(client)
             logger.info("Bo'sh album o'tkazib yuborildi: %s", unique_ids[0])
             return False
 
         fingerprint = text_fingerprint(caption)
-        if from_catchup and fingerprint and fingerprint in DEST_TEXT_FINGERPRINTS:
-            SENT_POSTS.update(unique_ids)
-            remember_source_seen(chat_id, source_ids)
-            save_many_to_history(unique_ids)
-            save_state()
-            logger.info("Oldin yuborilgan album fingerprint orqali tanildi: %s", unique_ids[0])
-            return False
-
         marker = encode_marker(chat_id, source_ids)
         reply_to = get_reply_dest_id(chat_id, messages)
 
@@ -440,6 +647,7 @@ async def process_album_messages(client, chat_id: int, messages: list, from_catc
 
         dest_messages = normalize_sent_messages(result)
         remember_mapping(chat_id, source_ids, dest_messages)
+        await save_state_to_telegram(client)
         if fingerprint:
             DEST_TEXT_FINGERPRINTS.add(fingerprint)
         logger.info("Yangi album yuborildi: %s ta xabar", len(source_ids))
@@ -476,6 +684,7 @@ async def rebuild_state_from_destination(client) -> None:
     if new_ids:
         save_many_to_history(new_ids)
     save_state()
+    await save_state_to_telegram(client)
     logger.info(
         "Destination scan tugadi: %s ta xabar, %s ta marker, xotirada %s ta post, last_source_id=%s.",
         scanned,
@@ -485,17 +694,65 @@ async def rebuild_state_from_destination(client) -> None:
     )
 
 
+async def infer_last_source_id_from_destination(client, source_ref) -> bool:
+    if SOURCE_CHAT_ID is None or not DEST_TEXT_FINGERPRINTS:
+        return False
+
+    async for message in client.iter_messages(source_ref, limit=CATCHUP_LIMIT):
+        fingerprint = text_fingerprint(message.message or "")
+        if fingerprint and fingerprint in DEST_TEXT_FINGERPRINTS:
+            changed = advance_last_source_id(
+                int(message.id),
+                "destination fingerprint",
+            )
+            if changed:
+                save_state()
+                await save_state_to_telegram(client)
+            return True
+
+    return False
+
+
+async def set_unknown_state_baseline(client, source_ref) -> None:
+    async for message in client.iter_messages(source_ref, limit=1):
+        if advance_last_source_id(int(message.id), "unknown state baseline"):
+            save_state()
+            await save_state_to_telegram(client)
+        logger.warning(
+            "Ishonchli state topilmadi. Eski postlar qayta yuborilmasligi uchun "
+            "baseline source_id=%s qilib olindi. Agar o'tkazib yuborilgan postlarni "
+            "tiklash kerak bo'lsa START_FROM_SOURCE_ID env'ni oxirgi yuborilgan "
+            "source IDga qo'ying.",
+            LAST_SOURCE_ID,
+        )
+        return
+
+    logger.warning("Manba kanalda post topilmadi, catch-up o'tkazib yuborildi.")
+
+
 async def catch_up_recent(client, source_ref) -> int:
     async with SYNC_LOCK:
         source_messages_by_id = {}
         start_id = LAST_SOURCE_ID
 
-        if start_id > 0:
-            async for message in client.iter_messages(source_ref, min_id=start_id, reverse=True):
+        if start_id <= 0:
+            if await infer_last_source_id_from_destination(client, source_ref):
+                start_id = LAST_SOURCE_ID
+            else:
+                await set_unknown_state_baseline(client, source_ref)
+                return 0
+
+        async for message in client.iter_messages(source_ref, min_id=start_id, reverse=True):
+            if int(message.id) > start_id:
                 source_messages_by_id[int(message.id)] = message
 
+        # Fallback faqat start_id'dan keyingi xabarlarni tekshiradi. Oldingi
+        # versiyada bu joy eski bo'shliqlarni "yangi" deb yuborib yuborishi mumkin edi.
         async for message in client.iter_messages(source_ref, limit=CATCHUP_LIMIT):
-            source_messages_by_id.setdefault(int(message.id), message)
+            message_id = int(message.id)
+            if message_id <= start_id:
+                break
+            source_messages_by_id.setdefault(message_id, message)
 
         source_messages = list(source_messages_by_id.values())
 
@@ -558,6 +815,7 @@ async def status_check(request: web.Request) -> web.Response:
             "sent": len(SENT_POSTS),
             "mapped": len(POST_MAP),
             "last_source_id": LAST_SOURCE_ID,
+            "state_channel_enabled": bool(STATE_CHANNEL),
         }
     )
 
@@ -665,9 +923,13 @@ async def main() -> None:
     source_entity = await client.get_entity(source_ref)
     SOURCE_CHAT_ID = get_peer_id(source_entity)
     logger.info("Source kanal topildi: %s -> %s", source_channel, SOURCE_CHAT_ID)
+    await load_state_from_telegram(client)
+    restore_last_source_id_from_known_state(SOURCE_CHAT_ID)
+    await save_state_to_telegram(client)
 
     logger.info("Destination marker scan boshlanmoqda: limit=%s", DEST_SCAN_LIMIT)
     await rebuild_state_from_destination(client)
+    await infer_last_source_id_from_destination(client, source_ref)
 
     async def sync_callback() -> int:
         return await catch_up_recent(client, source_ref)

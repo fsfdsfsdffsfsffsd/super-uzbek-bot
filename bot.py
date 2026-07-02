@@ -10,11 +10,11 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 #   Linux/Mac:  export BOT_TOKEN="yangi_tokeningiz"
 #   Windows:    set BOT_TOKEN=yangi_tokeningiz
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-DEST_CHANNEL = "@AvtoMashinaBozorElonlar"
+DEST_CHANNEL = os.environ.get("DEST_CHANNEL", "@AvtoMashinaBozorElonlar")
 
-NEW_LINK = "https://t.me/AvtoMashinaBozorElonlar"
+NEW_LINK = os.environ.get("NEW_LINK", "https://t.me/AvtoMashinaBozorElonlar")
 
-HISTORY_FILE = "sent_posts_history.txt"
+HISTORY_FILE = os.environ.get("HISTORY_FILE", "sent_posts_history.txt")
 
 # Barcha taklif (invite) havolalarini ushlaydigan pattern.
 # Ushlaydigan ko'rinishlar:
@@ -46,13 +46,13 @@ def replace_links(text: str) -> str:
 def load_history():
     if not os.path.exists(HISTORY_FILE):
         return set()
-    with open(HISTORY_FILE, "r") as f:
+    with open(HISTORY_FILE, "r", encoding="utf-8") as f:
         return set(line.strip() for line in f.readlines())
 
 
 # --- XOTIRAGA YOZISH ---
 def save_to_history(unique_id):
-    with open(HISTORY_FILE, "a") as f:
+    with open(HISTORY_FILE, "a", encoding="utf-8") as f:
         f.write(f"{unique_id}\n")
 
 
@@ -73,7 +73,7 @@ async def post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if getattr(origin, 'type', None) == 'channel':
                 unique_id = f"{origin.chat.id}_{origin.message_id}"
                 if unique_id in SENT_POSTS:
-                    await msg.reply_text("⚠️ Bu post oldin yuborilgan! (Bot xotirasida bor)")
+                    await msg.reply_text("[OLDIN] Bu post oldin yuborilgan! (Bot xotirasida bor)")
                     return
 
         # --- 2. HAVOLANI O'ZGARTIRISH ---
@@ -84,13 +84,20 @@ async def post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                await context.bot.copy_message(
-                    chat_id=DEST_CHANNEL,
-                    from_chat_id=msg.chat_id,
-                    message_id=msg.message_id,
-                    caption=new_caption if new_caption else None,
-                    parse_mode='HTML'
-                )
+                if msg.text:
+                    await context.bot.send_message(
+                        chat_id=DEST_CHANNEL,
+                        text=new_caption,
+                        parse_mode=None,
+                    )
+                else:
+                    await context.bot.copy_message(
+                        chat_id=DEST_CHANNEL,
+                        from_chat_id=msg.chat_id,
+                        message_id=msg.message_id,
+                        caption=new_caption if new_caption else None,
+                        parse_mode=None,
+                    )
                 break  # Muvaffaqiyatli bo'lsa chiqamiz
             except Exception as e:
                 if attempt < max_retries - 1:
@@ -106,12 +113,12 @@ async def post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             SENT_POSTS.add(unique_id)
             save_to_history(unique_id)
 
-        await msg.reply_text("✅ Yuborildi!")
+        await msg.reply_text("[OK] Yuborildi!")
 
     except Exception as e:
         logging.error(f"XATOLIK: {e}")
         try:
-            await msg.reply_text(f"❌ Xatolik bo'ldi: {e}")
+            await msg.reply_text(f"[XATO] Xatolik bo'ldi: {e}")
         except Exception:
             pass
 

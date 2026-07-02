@@ -1,0 +1,24 @@
+name: Keep Avtoelon userbot synced
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Call Render sync endpoint
+        env:
+          SYNC_URL: ${{ secrets.AVTOELON_SYNC_URL }}
+          SYNC_TOKEN: ${{ secrets.AVTOELON_SYNC_TOKEN }}
+        run: |
+          if [ -z "$SYNC_URL" ] || [ -z "$SYNC_TOKEN" ]; then
+            echo "AVTOELON_SYNC_URL and AVTOELON_SYNC_TOKEN secrets are required."
+            exit 1
+          fi
+
+          curl --fail --show-error --silent --max-time 180 \
+            "${SYNC_URL%/}/sync?token=${SYNC_TOKEN}"
