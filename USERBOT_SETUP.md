@@ -69,7 +69,9 @@ worker: python userbot.py
 
 ## Uxlab qolgan postlarni tutib olish
 
-`userbot.py` ishga tushganda manba kanalning oxirgi `CATCHUP_LIMIT` ta xabarini tekshiradi va yuborilmaganlarini yuboradi. Albumli e'lonlarda bitta post bir nechta Telegram xabardan iborat bo'lishi mumkin, shu sabab `CATCHUP_LIMIT=500` tavsiya qilinadi. Keyin har `CATCHUP_INTERVAL_SECONDS` sekundda yana tekshiradi.
+`userbot.py` ishga tushganda destination kanal markerlaridan oxirgi source message ID (`last_source_id`) ni tiklaydi. Keyin manba kanalda shu ID'dan keyin chiqqan hamma xabarlarni tartib bilan tekshiradi va yuborilmaganlarini yuboradi.
+
+`CATCHUP_LIMIT=500` fallback sifatida qoladi: agar marker/state yetarli bo'lmasa, bot oxirgi 500 ta source xabarni ham tekshiradi. Albumli e'lonlarda bitta post bir nechta Telegram xabardan iborat bo'lishi mumkin, shu sabab 500 tavsiya qilinadi. Keyin har `CATCHUP_INTERVAL_SECONDS` sekundda yana tekshiradi.
 
 `SKIP_REPLIES=true` bo'lsa, manba kanalda boshqa postga reply qilib yozilgan xabarlar destination kanalga yuborilmaydi.
 

@@ -79,6 +79,7 @@ logger = logging.getLogger(__name__)
 
 SOURCE_CHAT_ID: Optional[int] = None
 POST_MAP: dict[str, int] = {}
+LAST_SOURCE_ID = 0
 DEST_TEXT_FINGERPRINTS: set[str] = set()
 PROCESS_LOCK = asyncio.Lock()
 SYNC_LOCK = asyncio.Lock()
@@ -109,9 +110,9 @@ def save_many_to_history(unique_ids: Iterable[str]) -> None:
             file.write(f"{unique_id}\n")
 
 
-def load_state() -> tuple[set[str], dict[str, int]]:
+def load_state() -> tuple[set[str], dict[str, int], int]:
     if not os.path.exists(STATE_FILE):
-        return set(), {}
+        return set(), {}, 0
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as file:
             data = json.load(file)
@@ -120,13 +121,14 @@ def load_state() -> tuple[set[str], dict[str, int]]:
             str(source_id): int(dest_id)
             for source_id, dest_id in data.get("post_map", {}).items()
         }
-        return sent, post_map
+        last_source_id = int(data.get("last_source_id", 0))
+        return sent, post_map, last_source_id
     except Exception as error:
         logger.warning("State fayl o'qilmadi, yangidan boshlanadi: %s", error)
-        return set(), {}
+        return set(), {}, 0
 
 
-STATE_SENT, POST_MAP = load_state()
+STATE_SENT, POST_MAP, LAST_SOURCE_ID = load_state()
 SENT_POSTS = load_history() | STATE_SENT | set(POST_MAP)
 
 
@@ -134,6 +136,7 @@ def save_state() -> None:
     data = {
         "sent": sorted(SENT_POSTS),
         "post_map": POST_MAP,
+        "last_source_id": LAST_SOURCE_ID,
     }
     tmp_file = f"{STATE_FILE}.tmp"
     with open(tmp_file, "w", encoding="utf-8") as file:
@@ -266,9 +269,19 @@ def remember_mapping(chat_id: int, source_ids: list[int], dest_messages: list) -
         SENT_POSTS.add(unique_id)
         POST_MAP[unique_id] = dest_id
 
+    remember_source_seen(chat_id, source_ids)
     if new_unique_ids:
         save_many_to_history(new_unique_ids)
     save_state()
+
+
+def remember_source_seen(chat_id: int, source_ids: list[int]) -> None:
+    global LAST_SOURCE_ID
+
+    if SOURCE_CHAT_ID is not None and chat_id != SOURCE_CHAT_ID:
+        return
+    if source_ids:
+        LAST_SOURCE_ID = max(LAST_SOURCE_ID, max(int(source_id) for source_id in source_ids))
 
 
 async def send_with_retry(send_func, *args, **kwargs):
@@ -298,11 +311,14 @@ async def process_single_message(client, chat_id: int, message, from_catchup: bo
 
     async with PROCESS_LOCK:
         if unique_id in SENT_POSTS:
+            remember_source_seen(chat_id, source_ids)
+            save_state()
             logger.info("Dublikat o'tkazib yuborildi: %s", unique_id)
             return False
 
         if SKIP_REPLIES and is_reply_message(message):
             SENT_POSTS.add(unique_id)
+            remember_source_seen(chat_id, source_ids)
             save_to_history(unique_id)
             save_state()
             logger.info("Reply post o'tkazib yuborildi: %s", unique_id)
@@ -311,6 +327,7 @@ async def process_single_message(client, chat_id: int, message, from_catchup: bo
         text = replace_links(message.message or "")
         if not text and not has_file_media(message):
             SENT_POSTS.add(unique_id)
+            remember_source_seen(chat_id, source_ids)
             save_to_history(unique_id)
             save_state()
             logger.info("Bo'sh/service xabar o'tkazib yuborildi: %s", unique_id)
@@ -319,6 +336,7 @@ async def process_single_message(client, chat_id: int, message, from_catchup: bo
         fingerprint = text_fingerprint(text)
         if from_catchup and fingerprint and fingerprint in DEST_TEXT_FINGERPRINTS:
             SENT_POSTS.add(unique_id)
+            remember_source_seen(chat_id, source_ids)
             save_to_history(unique_id)
             save_state()
             logger.info("Oldin yuborilgan post fingerprint orqali tanildi: %s", unique_id)
@@ -363,11 +381,14 @@ async def process_album_messages(client, chat_id: int, messages: list, from_catc
 
     async with PROCESS_LOCK:
         if all(unique_id in SENT_POSTS for unique_id in unique_ids):
+            remember_source_seen(chat_id, source_ids)
+            save_state()
             logger.info("Album dublikati o'tkazib yuborildi: %s", unique_ids[0])
             return False
 
         if SKIP_REPLIES and any(is_reply_message(message) for message in messages):
             SENT_POSTS.update(unique_ids)
+            remember_source_seen(chat_id, source_ids)
             save_many_to_history(unique_ids)
             save_state()
             logger.info("Reply album o'tkazib yuborildi: %s", unique_ids[0])
@@ -378,6 +399,7 @@ async def process_album_messages(client, chat_id: int, messages: list, from_catc
         files = [message.media for message in messages if has_file_media(message)]
         if not files and not caption:
             SENT_POSTS.update(unique_ids)
+            remember_source_seen(chat_id, source_ids)
             save_many_to_history(unique_ids)
             save_state()
             logger.info("Bo'sh album o'tkazib yuborildi: %s", unique_ids[0])
@@ -386,6 +408,7 @@ async def process_album_messages(client, chat_id: int, messages: list, from_catc
         fingerprint = text_fingerprint(caption)
         if from_catchup and fingerprint and fingerprint in DEST_TEXT_FINGERPRINTS:
             SENT_POSTS.update(unique_ids)
+            remember_source_seen(chat_id, source_ids)
             save_many_to_history(unique_ids)
             save_state()
             logger.info("Oldin yuborilgan album fingerprint orqali tanildi: %s", unique_ids[0])
@@ -448,23 +471,33 @@ async def rebuild_state_from_destination(client) -> None:
                     new_ids.append(unique_id)
                 SENT_POSTS.add(unique_id)
                 POST_MAP.setdefault(unique_id, int(message.id))
+            remember_source_seen(chat_id, source_ids)
 
     if new_ids:
         save_many_to_history(new_ids)
     save_state()
     logger.info(
-        "Destination scan tugadi: %s ta xabar, %s ta marker, xotirada %s ta post.",
+        "Destination scan tugadi: %s ta xabar, %s ta marker, xotirada %s ta post, last_source_id=%s.",
         scanned,
         markers_found,
         len(SENT_POSTS),
+        LAST_SOURCE_ID,
     )
 
 
 async def catch_up_recent(client, source_ref) -> int:
     async with SYNC_LOCK:
-        source_messages = []
+        source_messages_by_id = {}
+        start_id = LAST_SOURCE_ID
+
+        if start_id > 0:
+            async for message in client.iter_messages(source_ref, min_id=start_id, reverse=True):
+                source_messages_by_id[int(message.id)] = message
+
         async for message in client.iter_messages(source_ref, limit=CATCHUP_LIMIT):
-            source_messages.append(message)
+            source_messages_by_id.setdefault(int(message.id), message)
+
+        source_messages = list(source_messages_by_id.values())
 
         sent_count = 0
         processed_groups = set()
@@ -484,7 +517,13 @@ async def catch_up_recent(client, source_ref) -> int:
             if await process_single_message(client, SOURCE_CHAT_ID, message, from_catchup=True):
                 sent_count += 1
 
-        logger.info("Catch-up tugadi: %s ta yangi post/album yuborildi.", sent_count)
+        logger.info(
+            "Catch-up tugadi: start_id=%s, tekshirildi=%s, yangi yuborildi=%s, last_source_id=%s.",
+            start_id,
+            len(source_messages),
+            sent_count,
+            LAST_SOURCE_ID,
+        )
         return sent_count
 
 
@@ -518,6 +557,7 @@ async def status_check(request: web.Request) -> web.Response:
             "ok": True,
             "sent": len(SENT_POSTS),
             "mapped": len(POST_MAP),
+            "last_source_id": LAST_SOURCE_ID,
         }
     )
 
@@ -618,11 +658,12 @@ async def main() -> None:
 
     await sync_callback()
     logger.info(
-        "Userbot ishga tushdi. Manba: %s (%s), kanal: %s, xotirada: %s ta post.",
+        "Userbot ishga tushdi. Manba: %s (%s), kanal: %s, xotirada: %s ta post, last_source_id=%s.",
         source_channel,
         SOURCE_CHAT_ID,
         DEST_CHANNEL,
         len(SENT_POSTS),
+        LAST_SOURCE_ID,
     )
 
     try:
