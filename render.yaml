@@ -23,7 +23,9 @@ services:
       - key: ALLOW_PUBLIC_SYNC
         value: false
       - key: CATCHUP_LIMIT
-        value: 50
+        value: 500
+      - key: SKIP_REPLIES
+        value: true
       - key: DEST_SCAN_LIMIT
         value: 1500
       - key: CATCHUP_INTERVAL_SECONDS

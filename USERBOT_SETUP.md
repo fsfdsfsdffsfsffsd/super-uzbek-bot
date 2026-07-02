@@ -49,7 +49,8 @@ TELETHON_SESSION=export_session.py chiqargan uzun qiymat
 SYNC_TOKEN=uzun_tasodifiy_maxfiy_matn
 NEW_LINK=https://t.me/AvtoMashinaBozorElonlar
 ALLOW_PUBLIC_SYNC=false
-CATCHUP_LIMIT=50
+CATCHUP_LIMIT=500
+SKIP_REPLIES=true
 DEST_SCAN_LIMIT=1500
 CATCHUP_INTERVAL_SECONDS=300
 ```
@@ -68,7 +69,9 @@ worker: python userbot.py
 
 ## Uxlab qolgan postlarni tutib olish
 
-`userbot.py` ishga tushganda manba kanalning oxirgi `CATCHUP_LIMIT` ta xabarini tekshiradi va yuborilmaganlarini yuboradi. Keyin har `CATCHUP_INTERVAL_SECONDS` sekundda yana tekshiradi.
+`userbot.py` ishga tushganda manba kanalning oxirgi `CATCHUP_LIMIT` ta xabarini tekshiradi va yuborilmaganlarini yuboradi. Albumli e'lonlarda bitta post bir nechta Telegram xabardan iborat bo'lishi mumkin, shu sabab `CATCHUP_LIMIT=500` tavsiya qilinadi. Keyin har `CATCHUP_INTERVAL_SECONDS` sekundda yana tekshiradi.
+
+`SKIP_REPLIES=true` bo'lsa, manba kanalda boshqa postga reply qilib yozilgan xabarlar destination kanalga yuborilmaydi.
 
 Destination kanalga yuborilgan postlarga ko'rinmaydigan marker qo'shiladi. Shu marker orqali bot restart/deploydan keyin ham qaysi source post qaysi destination postga ketganini tiklaydi va reply xabarlarni o'sha destination postga reply qilib yuboradi.
 

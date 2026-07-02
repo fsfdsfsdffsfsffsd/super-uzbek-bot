@@ -32,7 +32,7 @@ NEW_LINK = os.environ.get("NEW_LINK", "https://t.me/AvtoMashinaBozorElonlar")
 
 HISTORY_FILE = os.environ.get("HISTORY_FILE", "sent_posts_history.txt")
 STATE_FILE = os.environ.get("STATE_FILE", "post_state.json")
-CATCHUP_LIMIT = int(os.environ.get("CATCHUP_LIMIT", "50"))
+CATCHUP_LIMIT = max(500, int(os.environ.get("CATCHUP_LIMIT", "500")))
 DEST_SCAN_LIMIT = int(os.environ.get("DEST_SCAN_LIMIT", "1500"))
 CATCHUP_INTERVAL_SECONDS = int(os.environ.get("CATCHUP_INTERVAL_SECONDS", "300"))
 SYNC_TOKEN = os.environ.get("SYNC_TOKEN")
@@ -40,6 +40,11 @@ ALLOW_PUBLIC_SYNC = os.environ.get("ALLOW_PUBLIC_SYNC", "false").lower() in {
     "1",
     "true",
     "yes",
+}
+SKIP_REPLIES = os.environ.get("SKIP_REPLIES", "true").lower() not in {
+    "0",
+    "false",
+    "no",
 }
 
 # Telegram caption limit is 1024; text message limit is 4096.
@@ -234,6 +239,10 @@ def get_reply_source_id(message) -> Optional[int]:
     return getattr(reply_to, "reply_to_msg_id", None)
 
 
+def is_reply_message(message) -> bool:
+    return get_reply_source_id(message) is not None
+
+
 def get_reply_dest_id(chat_id: int, messages: list) -> Optional[int]:
     for message in messages:
         reply_source_id = get_reply_source_id(message)
@@ -292,6 +301,13 @@ async def process_single_message(client, chat_id: int, message, from_catchup: bo
             logger.info("Dublikat o'tkazib yuborildi: %s", unique_id)
             return False
 
+        if SKIP_REPLIES and is_reply_message(message):
+            SENT_POSTS.add(unique_id)
+            save_to_history(unique_id)
+            save_state()
+            logger.info("Reply post o'tkazib yuborildi: %s", unique_id)
+            return False
+
         text = replace_links(message.message or "")
         if not text and not has_file_media(message):
             SENT_POSTS.add(unique_id)
@@ -348,6 +364,13 @@ async def process_album_messages(client, chat_id: int, messages: list, from_catc
     async with PROCESS_LOCK:
         if all(unique_id in SENT_POSTS for unique_id in unique_ids):
             logger.info("Album dublikati o'tkazib yuborildi: %s", unique_ids[0])
+            return False
+
+        if SKIP_REPLIES and any(is_reply_message(message) for message in messages):
+            SENT_POSTS.update(unique_ids)
+            save_many_to_history(unique_ids)
+            save_state()
+            logger.info("Reply album o'tkazib yuborildi: %s", unique_ids[0])
             return False
 
         caption_source = next((message.message for message in messages if message.message), "")
