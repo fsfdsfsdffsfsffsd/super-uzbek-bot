@@ -25,6 +25,10 @@ API_HASH = os.environ.get("API_HASH")
 SOURCE_CHANNEL = os.environ.get("SOURCE_CHANNEL")
 DEST_CHANNEL = os.environ.get("DEST_CHANNEL", "@AvtoMashinaBozorElonlar")
 CONFIG_ERRORS: list[str] = []
+SOURCE_CHANNEL_RENAMES = {
+    "@engarzon_arzoni": "@mashina_engarzoni_elon_bozori",
+    "engarzon_arzoni": "@mashina_engarzoni_elon_bozori",
+}
 
 
 def read_int_env(name: str, default: int, min_value: Optional[int] = None) -> int:
@@ -235,6 +239,17 @@ def parse_chat_ref(value: str):
     if value.lstrip("-").isdigit():
         return int(value)
     return value
+
+
+def normalize_source_channel(value: str) -> str:
+    normalized = SOURCE_CHANNEL_RENAMES.get(value.strip().lower(), value.strip())
+    if normalized != value.strip():
+        logger.warning(
+            "SOURCE_CHANNEL eski username bo'lishi mumkin: %s -> %s",
+            value,
+            normalized,
+        )
+    return normalized
 
 
 def compact_ids(message_ids: list[int]) -> str:
@@ -744,6 +759,7 @@ async def main() -> None:
     try:
         api_id, api_hash, source_channel, dest_channel = require_env()
 
+        source_channel = normalize_source_channel(source_channel)
         source_ref = parse_chat_ref(source_channel)
         DEST_CHANNEL = parse_chat_ref(dest_channel)
         session = StringSession(TELETHON_SESSION) if TELETHON_SESSION else SESSION_NAME
