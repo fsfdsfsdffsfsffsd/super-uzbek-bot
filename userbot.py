@@ -24,6 +24,7 @@ API_ID = os.environ.get("API_ID")
 API_HASH = os.environ.get("API_HASH")
 SOURCE_CHANNEL = os.environ.get("SOURCE_CHANNEL")
 DEST_CHANNEL = os.environ.get("DEST_CHANNEL", "@AvtoMashinaBozorElonlar")
+CONFIG_ERRORS: list[str] = []
 
 
 def read_int_env(name: str, default: int, min_value: Optional[int] = None) -> int:
@@ -32,8 +33,11 @@ def read_int_env(name: str, default: int, min_value: Optional[int] = None) -> in
         return default
     try:
         value = int(raw_value)
-    except ValueError as error:
-        raise SystemExit(f"{name} butun son bo'lishi kerak: {raw_value!r}") from error
+    except ValueError:
+        CONFIG_ERRORS.append(
+            f"{name} butun son bo'lishi kerak: {raw_value!r}; {default} ishlatiladi"
+        )
+        return default
     if min_value is not None:
         return max(min_value, value)
     return value
@@ -95,6 +99,8 @@ POST_MAP: dict[str, int] = {}
 LAST_SOURCE_ID = 0
 PROCESS_LOCK = asyncio.Lock()
 SYNC_LOCK = asyncio.Lock()
+BOT_READY = False
+STARTUP_ERROR: Optional[str] = None
 
 
 def replace_links(text: Optional[str]) -> str:
@@ -618,7 +624,11 @@ async def periodic_catch_up(sync_callback) -> None:
 
 
 async def health_check(request: web.Request) -> web.Response:
-    return web.Response(text="Avtoelon userbot ishlayapti\n")
+    if BOT_READY:
+        return web.Response(text="Avtoelon userbot ishlayapti\n")
+
+    details = STARTUP_ERROR or "Telegram qismi hali tayyor emas"
+    return web.Response(text=f"Avtoelon userbot web server ishlayapti, lekin bot tayyor emas: {details}\n")
 
 
 def is_authorized(request: web.Request) -> bool:
@@ -632,19 +642,26 @@ async def status_check(request: web.Request) -> web.Response:
     if not is_authorized(request):
         return web.Response(status=403, text="Forbidden")
 
-    return web.json_response(
-        {
-            "ok": True,
-            "sent": len(SENT_POSTS),
-            "mapped": len(POST_MAP),
-            "last_source_id": LAST_SOURCE_ID,
-        }
-    )
+    payload = {
+        "ok": BOT_READY,
+        "telegram_ready": BOT_READY,
+        "sent": len(SENT_POSTS),
+        "mapped": len(POST_MAP),
+        "last_source_id": LAST_SOURCE_ID,
+    }
+    if STARTUP_ERROR:
+        payload["startup_error"] = STARTUP_ERROR
+    if CONFIG_ERRORS:
+        payload["config_warnings"] = CONFIG_ERRORS
+    return web.json_response(payload, status=200 if BOT_READY else 503)
 
 
 async def sync_check(request: web.Request) -> web.Response:
     if not is_authorized(request):
         return web.Response(status=403, text="Forbidden")
+
+    if STARTUP_ERROR:
+        return web.Response(status=503, text=f"Userbot tayyor emas: {STARTUP_ERROR}\n")
 
     sync_callback = request.app.get("sync_callback")
     if not sync_callback:
@@ -698,7 +715,7 @@ def require_env() -> tuple[int, str, str, str]:
         if not value
     ]
     if missing:
-        raise SystemExit(
+        raise RuntimeError(
             "Quyidagi env qiymatlar topilmadi: "
             + ", ".join(missing)
             + "\nMasalan PowerShell:\n"
@@ -709,67 +726,86 @@ def require_env() -> tuple[int, str, str, str]:
             + "  python userbot.py"
         )
 
-    return int(API_ID), API_HASH, SOURCE_CHANNEL, DEST_CHANNEL
+    try:
+        api_id = int(API_ID)
+    except ValueError as error:
+        raise RuntimeError(f"API_ID butun son bo'lishi kerak: {API_ID!r}") from error
+
+    return api_id, API_HASH, SOURCE_CHANNEL, DEST_CHANNEL
 
 
 async def main() -> None:
-    global DEST_CHANNEL, SOURCE_CHAT_ID
+    global BOT_READY, DEST_CHANNEL, SOURCE_CHAT_ID, STARTUP_ERROR
 
-    api_id, api_hash, source_channel, dest_channel = require_env()
-
-    source_ref = parse_chat_ref(source_channel)
-    DEST_CHANNEL = parse_chat_ref(dest_channel)
-    session = StringSession(TELETHON_SESSION) if TELETHON_SESSION else SESSION_NAME
-    client = TelegramClient(session, api_id, api_hash)
     health_runner = await start_health_server()
     periodic_task = None
-
-    @client.on(events.Album(chats=source_ref))
-    async def album_listener(event: events.Album.Event) -> None:
-        try:
-            await process_album_messages(event.client, event.chat_id, list(event.messages))
-        except Exception as error:
-            logger.exception("Album yuborishda xatolik: %s", error)
-
-    @client.on(events.NewMessage(chats=source_ref))
-    async def message_listener(event: events.NewMessage.Event) -> None:
-        if event.message.grouped_id:
-            return
-        try:
-            await process_single_message(event.client, event.chat_id, event.message)
-        except Exception as error:
-            logger.exception("Post yuborishda xatolik: %s", error)
-
-    await start_telegram_client(client)
-    logger.info("Source kanal entity olinmoqda: %s", source_channel)
-    source_entity = await client.get_entity(source_ref)
-    SOURCE_CHAT_ID = get_peer_id(source_entity)
-    logger.info("Source kanal topildi: %s -> %s", source_channel, SOURCE_CHAT_ID)
-    restore_last_source_id_from_known_state(SOURCE_CHAT_ID)
-
-    logger.info("Destination marker scan boshlanmoqda: limit=%s", DEST_SCAN_LIMIT)
-    await rebuild_state_from_destination(client)
-
-    async def sync_callback() -> int:
-        return await catch_up_recent(client, source_ref)
-
-    if health_runner:
-        health_runner.app["sync_callback"] = sync_callback
-    periodic_task = asyncio.create_task(periodic_catch_up(sync_callback))
-
-    logger.info("Startup catch-up boshlanmoqda...")
-    await sync_callback()
-    logger.info(
-        "Userbot ishga tushdi. Manba: %s (%s), kanal: %s, xotirada: %s ta post, last_source_id=%s.",
-        source_channel,
-        SOURCE_CHAT_ID,
-        DEST_CHANNEL,
-        len(SENT_POSTS),
-        LAST_SOURCE_ID,
-    )
+    client = None
 
     try:
+        api_id, api_hash, source_channel, dest_channel = require_env()
+
+        source_ref = parse_chat_ref(source_channel)
+        DEST_CHANNEL = parse_chat_ref(dest_channel)
+        session = StringSession(TELETHON_SESSION) if TELETHON_SESSION else SESSION_NAME
+        client = TelegramClient(session, api_id, api_hash)
+
+        @client.on(events.Album(chats=source_ref))
+        async def album_listener(event: events.Album.Event) -> None:
+            try:
+                await process_album_messages(event.client, event.chat_id, list(event.messages))
+            except Exception as error:
+                logger.exception("Album yuborishda xatolik: %s", error)
+
+        @client.on(events.NewMessage(chats=source_ref))
+        async def message_listener(event: events.NewMessage.Event) -> None:
+            if event.message.grouped_id:
+                return
+            try:
+                await process_single_message(event.client, event.chat_id, event.message)
+            except Exception as error:
+                logger.exception("Post yuborishda xatolik: %s", error)
+
+        await start_telegram_client(client)
+        logger.info("Source kanal entity olinmoqda: %s", source_channel)
+        source_entity = await client.get_entity(source_ref)
+        SOURCE_CHAT_ID = get_peer_id(source_entity)
+        logger.info("Source kanal topildi: %s -> %s", source_channel, SOURCE_CHAT_ID)
+        restore_last_source_id_from_known_state(SOURCE_CHAT_ID)
+
+        logger.info("Destination marker scan boshlanmoqda: limit=%s", DEST_SCAN_LIMIT)
+        await rebuild_state_from_destination(client)
+
+        async def sync_callback() -> int:
+            return await catch_up_recent(client, source_ref)
+
+        if health_runner:
+            health_runner.app["sync_callback"] = sync_callback
+        periodic_task = asyncio.create_task(periodic_catch_up(sync_callback))
+
+        logger.info("Startup catch-up boshlanmoqda...")
+        await sync_callback()
+        BOT_READY = True
+        STARTUP_ERROR = None
+        logger.info(
+            "Userbot ishga tushdi. Manba: %s (%s), kanal: %s, xotirada: %s ta post, last_source_id=%s.",
+            source_channel,
+            SOURCE_CHAT_ID,
+            DEST_CHANNEL,
+            len(SENT_POSTS),
+            LAST_SOURCE_ID,
+        )
         await client.run_until_disconnected()
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:
+        BOT_READY = False
+        STARTUP_ERROR = str(error)
+        logger.exception("Userbot ishga tushmadi: %s", error)
+        if client:
+            await client.disconnect()
+        if health_runner:
+            await asyncio.Event().wait()
+        raise
     finally:
         if periodic_task:
             periodic_task.cancel()
