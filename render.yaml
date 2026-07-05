@@ -30,6 +30,10 @@ services:
         value: 1500
       - key: CATCHUP_INTERVAL_SECONDS
         value: 300
+      - key: RECONNECT_DELAY_SECONDS
+        value: 60
+      - key: SYNC_TIMEOUT_SECONDS
+        value: 180
       - key: START_FROM_SOURCE_ID
         value: 0
       - key: PYTHON_VERSION

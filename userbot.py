@@ -1,5 +1,6 @@
 import asyncio
 import base64
+from datetime import datetime, timezone
 import json
 import logging
 import os
@@ -56,6 +57,8 @@ STATE_FILE = os.environ.get("STATE_FILE", "post_state.json")
 CATCHUP_LIMIT = read_int_env("CATCHUP_LIMIT", 500, min_value=1)
 DEST_SCAN_LIMIT = read_int_env("DEST_SCAN_LIMIT", 1500, min_value=1)
 CATCHUP_INTERVAL_SECONDS = read_int_env("CATCHUP_INTERVAL_SECONDS", 300, min_value=1)
+RECONNECT_DELAY_SECONDS = read_int_env("RECONNECT_DELAY_SECONDS", 60, min_value=5)
+SYNC_TIMEOUT_SECONDS = read_int_env("SYNC_TIMEOUT_SECONDS", 180, min_value=30)
 START_FROM_SOURCE_ID = read_int_env("START_FROM_SOURCE_ID", 0, min_value=0)
 SYNC_TOKEN = os.environ.get("SYNC_TOKEN")
 ALLOW_PUBLIC_SYNC = os.environ.get("ALLOW_PUBLIC_SYNC", "false").lower() in {
@@ -105,6 +108,8 @@ PROCESS_LOCK = asyncio.Lock()
 SYNC_LOCK = asyncio.Lock()
 BOT_READY = False
 STARTUP_ERROR: Optional[str] = None
+LAST_SYNC_AT: Optional[str] = None
+LAST_SYNC_ERROR: Optional[str] = None
 
 
 def replace_links(text: Optional[str]) -> str:
@@ -628,12 +633,34 @@ async def catch_up_recent(client, source_ref) -> int:
         return sent_count
 
 
+def describe_error(error: Exception) -> str:
+    message = str(error)
+    return message if message else type(error).__name__
+
+
+async def run_sync_with_timeout(sync_callback) -> int:
+    global LAST_SYNC_AT, LAST_SYNC_ERROR
+
+    try:
+        sent_count = await asyncio.wait_for(
+            sync_callback(),
+            timeout=SYNC_TIMEOUT_SECONDS,
+        )
+        LAST_SYNC_AT = datetime.now(timezone.utc).isoformat()
+        LAST_SYNC_ERROR = None
+        return sent_count
+    except Exception as error:
+        LAST_SYNC_ERROR = describe_error(error)
+        logger.exception("Sync xatoligi: %s", LAST_SYNC_ERROR)
+        raise
+
+
 async def periodic_catch_up(sync_callback) -> None:
     interval = max(60, CATCHUP_INTERVAL_SECONDS)
     while True:
         await asyncio.sleep(interval)
         try:
-            await sync_callback()
+            await run_sync_with_timeout(sync_callback)
         except Exception as error:
             logger.exception("Periodic catch-up xatoligi: %s", error)
 
@@ -663,6 +690,8 @@ async def status_check(request: web.Request) -> web.Response:
         "sent": len(SENT_POSTS),
         "mapped": len(POST_MAP),
         "last_source_id": LAST_SOURCE_ID,
+        "last_sync_at": LAST_SYNC_AT,
+        "last_sync_error": LAST_SYNC_ERROR,
     }
     if STARTUP_ERROR:
         payload["startup_error"] = STARTUP_ERROR
@@ -682,7 +711,7 @@ async def sync_check(request: web.Request) -> web.Response:
     if not sync_callback:
         return web.Response(status=503, text="Sync hali tayyor emas")
 
-    sent_count = await sync_callback()
+    sent_count = await run_sync_with_timeout(sync_callback)
     return web.Response(text=f"Sync tugadi. Yangi yuborilgan: {sent_count}\n")
 
 
@@ -749,10 +778,14 @@ def require_env() -> tuple[int, str, str, str]:
     return api_id, API_HASH, SOURCE_CHANNEL, DEST_CHANNEL
 
 
-async def main() -> None:
+async def run_userbot_once(health_runner) -> None:
     global BOT_READY, DEST_CHANNEL, SOURCE_CHAT_ID, STARTUP_ERROR
 
-    health_runner = await start_health_server()
+    BOT_READY = False
+    STARTUP_ERROR = None
+    if health_runner:
+        health_runner.app["sync_callback"] = None
+
     periodic_task = None
     client = None
 
@@ -794,12 +827,12 @@ async def main() -> None:
         async def sync_callback() -> int:
             return await catch_up_recent(client, source_ref)
 
+        logger.info("Startup catch-up boshlanmoqda...")
+        await run_sync_with_timeout(sync_callback)
+
         if health_runner:
             health_runner.app["sync_callback"] = sync_callback
         periodic_task = asyncio.create_task(periodic_catch_up(sync_callback))
-
-        logger.info("Startup catch-up boshlanmoqda...")
-        await sync_callback()
         BOT_READY = True
         STARTUP_ERROR = None
         logger.info(
@@ -811,22 +844,41 @@ async def main() -> None:
             LAST_SOURCE_ID,
         )
         await client.run_until_disconnected()
-    except asyncio.CancelledError:
-        raise
-    except Exception as error:
-        BOT_READY = False
-        STARTUP_ERROR = str(error)
-        logger.exception("Userbot ishga tushmadi: %s", error)
-        if client:
-            await client.disconnect()
-        if health_runner:
-            await asyncio.Event().wait()
-        raise
+        raise RuntimeError("Telegram client disconnected")
     finally:
+        BOT_READY = False
+        if health_runner:
+            health_runner.app["sync_callback"] = None
         if periodic_task:
             periodic_task.cancel()
-        if health_runner:
-            await health_runner.cleanup()
+        if client:
+            await client.disconnect()
+
+
+async def main() -> None:
+    global STARTUP_ERROR
+
+    health_runner = await start_health_server()
+    if not health_runner:
+        await run_userbot_once(None)
+        return
+
+    try:
+        while True:
+            try:
+                await run_userbot_once(health_runner)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                STARTUP_ERROR = describe_error(error)
+                logger.exception(
+                    "Userbot to'xtadi: %s. %s soniyadan keyin qayta ulanadi.",
+                    STARTUP_ERROR,
+                    RECONNECT_DELAY_SECONDS,
+                )
+                await asyncio.sleep(RECONNECT_DELAY_SECONDS)
+    finally:
+        await health_runner.cleanup()
 
 
 if __name__ == "__main__":
