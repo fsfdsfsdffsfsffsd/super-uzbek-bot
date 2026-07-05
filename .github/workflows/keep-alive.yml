@@ -1,28 +1,34 @@
 name: Keep Render bot awake
 
 # Render bepul tarifi 15 daqiqa harakatsizlikdan keyin botni uxlatadi.
-# Bu workflow har 10 daqiqada bot manziliga ping yuborib, uni uyg'oq tutadi.
+# Bu workflow bot manziliga ping yuborib, userbot sync ishlayotganini tekshiradi.
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:        # Qo'lda ham ishga tushirish mumkin
 
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Ping bot
         env:
           AVTOELON_SYNC_TOKEN: ${{ secrets.AVTOELON_SYNC_TOKEN }}
         run: |
           echo "Ping yuborilmoqda: $(date -u)"
+          # Eski oddiy bot servisi mavjud bo'lsa uyg'otib qo'yamiz, lekin Avtoelon
+          # userbot sog'lig'i quyidagi /sync chaqiruvi bilan tekshiriladi.
           curl -sS -m 60 https://super-uzbek-bot.onrender.com/ || true
           curl -sS -m 60 https://super-uzbek-bot-1.onrender.com/ || true
-          if [ -n "$AVTOELON_SYNC_TOKEN" ]; then
-            curl -sS -m 60 "https://super-uzbek-bot-1.onrender.com/sync?token=${AVTOELON_SYNC_TOKEN}" || true
-          else
-            echo "AVTOELON_SYNC_TOKEN secret topilmadi; faqat wake ping yuborildi."
+
+          if [ -z "$AVTOELON_SYNC_TOKEN" ]; then
+            echo "AVTOELON_SYNC_TOKEN secret topilmadi; /sync tekshiruvi bajarilmadi."
+            exit 1
           fi
+
+          curl --fail --show-error --silent --max-time 240 \
+            "https://super-uzbek-bot-1.onrender.com/sync?token=${AVTOELON_SYNC_TOKEN}"
           echo ""
           echo "Tayyor."
