@@ -27,8 +27,12 @@ SOURCE_CHANNEL = os.environ.get("SOURCE_CHANNEL")
 DEST_CHANNEL = os.environ.get("DEST_CHANNEL", "@AvtoMashinaBozorElonlar")
 CONFIG_ERRORS: list[str] = []
 SOURCE_CHANNEL_RENAMES = {
-    "@engarzon_arzoni": "@mashina_engarzoni_elon_bozor",
-    "engarzon_arzoni": "@mashina_engarzoni_elon_bozor",
+    "@engarzon_arzoni": "@rasmiyavtobozor",
+    "engarzon_arzoni": "@rasmiyavtobozor",
+    "@mashina_engarzoni_elon_bozor": "@rasmiyavtobozor",
+    "mashina_engarzoni_elon_bozor": "@rasmiyavtobozor",
+    "@mashina_engarzoni_elon_bozori": "@rasmiyavtobozor",
+    "mashina_engarzoni_elon_bozori": "@rasmiyavtobozor",
 }
 
 
