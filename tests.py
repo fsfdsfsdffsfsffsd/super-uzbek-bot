@@ -1,11 +1,12 @@
 import unittest
 from unittest.mock import MagicMock, patch, AsyncMock
-from bot import SuperUzbekBot, PrayerData, PrayerTime, CurrencyData, AirQualityData, WeatherData
+from bot import SuperUzbekBot, PrayerData, PrayerTime, CurrencyData, AirQualityData, WeatherData, cache
 import asyncio
 from datetime import datetime
 
 class TestSuperUzbekBot(unittest.TestCase):
     def setUp(self):
+        cache.clear()
         self.bot = SuperUzbekBot()
         # Mock session creation to avoid actual network init
         self.bot.session = MagicMock()
@@ -128,6 +129,34 @@ class TestSuperUzbekBot(unittest.TestCase):
             max_retries=5,
             delay=3,
         )
+
+    @patch('bot.SuperUzbekBot.fetch_with_retry', new_callable=AsyncMock)
+    def test_fetch_air_quality_uses_iqair_fallback_url(self, mock_fetch):
+        html = """
+        <script type="application/ld+json">
+        {
+            "@type": "Observation",
+            "variableMeasured": [
+                {
+                    "@type": "PropertyValue",
+                    "name": "Air Quality Index (US AQI+)",
+                    "value": 77
+                }
+            ]
+        }
+        </script>
+        """
+        mock_fetch.side_effect = [None, html]
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(self.bot.fetch_air_quality())
+        loop.close()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.aqi, "77")
+        self.assertEqual(mock_fetch.await_args_list[0].args[0], "https://www.iqair.com/ru/air-quality/uzbekistan/toshkent-shahri/tashkent")
+        self.assertEqual(mock_fetch.await_args_list[1].args[0], "https://www.iqair.com/air-quality/uzbekistan/toshkent-shahri/tashkent")
 
     @patch('bot.SuperUzbekBot.fetch_with_retry', new_callable=AsyncMock)
     def test_fetch_weather_data(self, mock_fetch):

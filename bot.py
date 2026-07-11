@@ -4,6 +4,7 @@ from datetime import datetime
 import aiohttp
 from bs4 import BeautifulSoup
 import re
+import json
 import ssl
 import certifi
 import os
@@ -118,6 +119,11 @@ class SuperUzbekBot:
 
     def __init__(self):
         self.iqair_url = "https://www.iqair.com/ru/air-quality/uzbekistan/toshkent-shahri/tashkent"
+        self.iqair_urls = [
+            self.iqair_url,
+            "https://www.iqair.com/air-quality/uzbekistan/toshkent-shahri/tashkent",
+            "https://www.iqair.cn/cn-en/air-quality/uzbekistan/toshkent-shahri/tashkent",
+        ]
         self.muslim_url = "https://www.muslim.uz/oz"
         self.bank_url = "https://bank.uz/uz/currency"
         self.weather_url = "https://yandex.uz/pogoda/ru/tashkent?lat=41.330278&lon=69.337088"
@@ -298,62 +304,115 @@ class SuperUzbekBot:
         if cached_data:
             return cached_data
         
-        try:
-            html = await self.fetch_with_retry(self.iqair_url, max_retries=5, delay=3)
-            if not html:
-                logger.error(f"IQAir sahifasidan havo sifati olinmadi: {self.iqair_url}")
-                return None
-
-            soup = BeautifulSoup(html, 'html.parser')
-            aqi_value = "N/A"
-            quality = "N/A"
-            pollutant = "N/A"
-            concentration = "N/A"
-
-            for card in soup.select('div.line-clamp-2[class*="aqi-legend-bg-"]'):
-                if "AQI" not in card.get_text(" ", strip=True):
+        for url in self.iqair_urls:
+            try:
+                html = await self.fetch_with_retry(url, max_retries=5, delay=3)
+                if not html:
+                    logger.error(f"IQAir sahifasidan havo sifati olinmadi: {url}")
                     continue
 
-                element = card.select_one('p.text-lg.font-medium')
-                if element and element.text.strip():
-                    aqi_value = re.sub(r'[^\d]', '', element.text.strip())
-                    if aqi_value:
-                        break
+                result = self.parse_iqair_air_quality(html)
+                if result:
+                    self._set_cached_data(cache_key, result)
+                    return result
 
-            selectors = [
-                ('p', {'class': 'text-lg font-medium'}),
-                ('div', {'class': 'aqi-value'}),
-                ('span', {'class': 'indexValue'}),
-                ('div', {'class': 'indexValue'})
-            ]
+                logger.error(f"IQAir sahifasidan AQI qiymati topilmadi: {url}")
+            except Exception as e:
+                logger.error(f"Havo sifati xato: {str(e)} - {url}")
 
-            if aqi_value == "N/A":
-                for tag, attrs in selectors:
-                    element = soup.find(tag, attrs)
-                    if element and element.text.strip():
-                        aqi_value = re.sub(r'[^\d]', '', element.text.strip())
-                        if aqi_value: break
+        return None
 
-            if aqi_value == "N/A":
-                logger.error("IQAir sahifasidan AQI qiymati topilmadi")
-                return None
+    def parse_iqair_air_quality(self, html: str) -> Optional[AirQualityData]:
+        soup = BeautifulSoup(html, 'html.parser')
+        aqi_value = "N/A"
+        quality = "N/A"
+        pollutant = "N/A"
+        concentration = "N/A"
 
-            quality_selectors = [('p', {'class': 'font-body-l-medium'}), ('div', {'class': 'level-name'})]
-            for tag, attrs in quality_selectors:
-                element = soup.find(tag, attrs)
-                if element and element.text.strip():
-                    quality = element.text.strip()
+        for card in soup.select('div.line-clamp-2[class*="aqi-legend-bg-"]'):
+            if "AQI" not in card.get_text(" ", strip=True):
+                continue
+
+            element = card.select_one('p.text-lg.font-medium')
+            if element and element.text.strip():
+                aqi_value = re.sub(r'[^\d]', '', element.text.strip())
+                if aqi_value:
                     break
 
-            result = AirQualityData(
-                aqi=aqi_value, quality=quality, pollutant=pollutant,
-                concentration=concentration, timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            )
-            self._set_cached_data(cache_key, result)
-            return result
-        except Exception as e:
-            logger.error(f"Havo sifati xato: {str(e)}")
+        selectors = [
+            ('p', {'class': 'text-lg font-medium'}),
+            ('div', {'class': 'aqi-value'}),
+            ('span', {'class': 'indexValue'}),
+            ('div', {'class': 'indexValue'})
+        ]
+
+        if aqi_value == "N/A":
+            for tag, attrs in selectors:
+                element = soup.find(tag, attrs)
+                if element and element.text.strip():
+                    aqi_value = re.sub(r'[^\d]', '', element.text.strip())
+                    if aqi_value: break
+
+        if aqi_value == "N/A":
+            aqi_value = self.extract_aqi_from_json_ld(soup) or "N/A"
+
+        if aqi_value == "N/A":
             return None
+
+        quality_selectors = [('p', {'class': 'font-body-l-medium'}), ('div', {'class': 'level-name'})]
+        for tag, attrs in quality_selectors:
+            element = soup.find(tag, attrs)
+            if element and element.text.strip():
+                quality = element.text.strip()
+                break
+
+        return AirQualityData(
+            aqi=aqi_value, quality=quality, pollutant=pollutant,
+            concentration=concentration, timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        )
+
+    def extract_aqi_from_json_ld(self, soup: BeautifulSoup) -> Optional[str]:
+        def walk(node: Any) -> Optional[str]:
+            if isinstance(node, dict):
+                measurements = node.get("variableMeasured")
+                if isinstance(measurements, list):
+                    for item in measurements:
+                        if not isinstance(item, dict):
+                            continue
+                        name = str(item.get("name", ""))
+                        value = item.get("value")
+                        if "Air Quality Index" in name and value is not None:
+                            digits = re.sub(r'[^\d]', '', str(value))
+                            if digits:
+                                return digits
+
+                for value in node.values():
+                    found = walk(value)
+                    if found:
+                        return found
+
+            if isinstance(node, list):
+                for item in node:
+                    found = walk(item)
+                    if found:
+                        return found
+
+            return None
+
+        for script in soup.find_all("script", {"type": "application/ld+json"}):
+            text = script.string or script.get_text()
+            if not text:
+                continue
+
+            try:
+                found = walk(json.loads(text))
+            except json.JSONDecodeError:
+                continue
+
+            if found:
+                return found
+
+        return None
 
     def get_aqi_emoji(self, aqi_value: str) -> str:
         try:
