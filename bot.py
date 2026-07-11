@@ -16,7 +16,6 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 from telegram.constants import ParseMode
 from typing import List, Dict, Optional, Any
 import time
-import json
 from dataclasses import dataclass
 from enum import Enum
 
@@ -118,11 +117,7 @@ class SuperUzbekBot:
     """Barcha funksiyalarni o'z ichiga olgan asosiy bot klassi"""
 
     def __init__(self):
-        # Havo sifati — Open-Meteo bepul API (kalitsiz, JSON, datacenter IP'larini bloklamaydi)
-        self.airquality_url = (
-            "https://air-quality-api.open-meteo.com/v1/air-quality"
-            "?latitude=41.2995&longitude=69.2401&current=us_aqi&timezone=auto"
-        )
+        self.iqair_url = "https://www.iqair.com/ru/air-quality/uzbekistan/toshkent-shahri/tashkent"
         self.muslim_url = "https://www.muslim.uz/oz"
         self.bank_url = "https://bank.uz/uz/currency"
         self.weather_url = "https://yandex.uz/pogoda/ru/tashkent?lat=41.330278&lon=69.337088"
@@ -304,17 +299,49 @@ class SuperUzbekBot:
             return cached_data
         
         try:
-            raw = await self.fetch_with_retry(self.airquality_url)
-            if not raw: return None
+            html = await self.fetch_with_retry(self.iqair_url)
+            if not html: return None
 
-            data = json.loads(raw)
-            aqi_value = data.get("current", {}).get("us_aqi")
-            if aqi_value is None:
-                return None
+            soup = BeautifulSoup(html, 'html.parser')
+            aqi_value = "N/A"
+            quality = "N/A"
+            pollutant = "N/A"
+            concentration = "N/A"
+
+            for card in soup.select('div.line-clamp-2[class*="aqi-legend-bg-"]'):
+                if "AQI" not in card.get_text(" ", strip=True):
+                    continue
+
+                element = card.select_one('p.text-lg.font-medium')
+                if element and element.text.strip():
+                    aqi_value = re.sub(r'[^\d]', '', element.text.strip())
+                    if aqi_value:
+                        break
+
+            selectors = [
+                ('p', {'class': 'text-lg font-medium'}),
+                ('div', {'class': 'aqi-value'}),
+                ('span', {'class': 'indexValue'}),
+                ('div', {'class': 'indexValue'})
+            ]
+
+            if aqi_value == "N/A":
+                for tag, attrs in selectors:
+                    element = soup.find(tag, attrs)
+                    if element and element.text.strip():
+                        aqi_value = re.sub(r'[^\d]', '', element.text.strip())
+                        if aqi_value: break
+
+            quality_selectors = [('p', {'class': 'font-body-l-medium'}), ('div', {'class': 'level-name'})]
+            for tag, attrs in quality_selectors:
+                element = soup.find(tag, attrs)
+                if element and element.text.strip():
+                    quality = element.text.strip()
+                    break
 
             result = AirQualityData(
-                aqi=str(int(aqi_value)), quality="N/A", pollutant="N/A",
-                concentration="N/A", timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                aqi=aqi_value, quality=quality, pollutant=pollutant,
+                concentration=concentration, timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             )
             self._set_cached_data(cache_key, result)
             return result
@@ -375,7 +402,7 @@ class SuperUzbekBot:
             f"💡 *Tavsiya:*\n"
             f"{data['advice']}\n\n"
 
-            f"_Ma'lumot Open-Meteo (US AQI) dan olindi_"
+            f"_Ma'lumot IQAir.com saytidan olindi_"
         )
         return result
 
