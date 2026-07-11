@@ -66,6 +66,7 @@ logger = logging.getLogger(__name__)
 # Cache tizimi (OPTIMALLASHTIRILDI: 1000 foydalanuvchi uchun)
 cache = {}
 CACHE_TIME = 3600  # 1 soat (5 daqiqa o'rniga)
+AIR_QUALITY_CACHE_TIME = 60
 
 # Rate limiting
 last_request_time = {}
@@ -128,7 +129,6 @@ class SuperUzbekBot:
         self.iqair_urls = [
             self.iqair_url,
             "https://www.iqair.com/air-quality/uzbekistan/toshkent-shahri/tashkent",
-            "https://www.iqair.cn/cn-en/air-quality/uzbekistan/toshkent-shahri/tashkent",
         ]
         self.muslim_url = "https://www.muslim.uz/oz"
         self.bank_url = "https://bank.uz/uz/currency"
@@ -319,7 +319,7 @@ class SuperUzbekBot:
 
                 result = self.parse_iqair_air_quality(html)
                 if result:
-                    self._set_cached_data(cache_key, result)
+                    self._set_cached_data(cache_key, result, expiry=AIR_QUALITY_CACHE_TIME)
                     return result
 
                 logger.error(f"IQAir sahifasidan AQI qiymati topilmadi: {url}")
@@ -1096,8 +1096,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 4. Havo tozaligi
     elif "Havo tozaligi" in text:
         await send_typing_action(chat_id, context)
-        if not bot.cached_air:  # Cache bo'sh bo'lsa — darhol yuklaymiz
-            bot.cached_air = await bot.fetch_air_quality()
+        bot.cached_air = await bot.fetch_air_quality()
         if bot.cached_air:
             data = bot.cached_air
             rec = bot.get_recommendations(data.aqi)

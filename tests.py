@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch, AsyncMock
-from bot import SuperUzbekBot, PrayerData, PrayerTime, CurrencyData, AirQualityData, WeatherData, cache, tashkent_now
+from bot import SuperUzbekBot, PrayerData, PrayerTime, CurrencyData, AirQualityData, WeatherData, cache, tashkent_now, AIR_QUALITY_CACHE_TIME
 import asyncio
 from datetime import datetime
 
@@ -130,6 +130,7 @@ class TestSuperUzbekBot(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.aqi, "84")
         self.assertEqual(result.quality, "Unhealthy for Sensitive Groups")
+        self.assertEqual(cache["air_quality"]["expiry"], AIR_QUALITY_CACHE_TIME)
         mock_fetch.assert_awaited_once_with(
             "https://www.iqair.com/ru/air-quality/uzbekistan/toshkent-shahri/tashkent",
             max_retries=5,
@@ -163,6 +164,7 @@ class TestSuperUzbekBot(unittest.TestCase):
         self.assertEqual(result.aqi, "77")
         self.assertEqual(mock_fetch.await_args_list[0].args[0], "https://www.iqair.com/ru/air-quality/uzbekistan/toshkent-shahri/tashkent")
         self.assertEqual(mock_fetch.await_args_list[1].args[0], "https://www.iqair.com/air-quality/uzbekistan/toshkent-shahri/tashkent")
+        self.assertEqual(mock_fetch.await_count, 2)
 
     @patch('bot.SuperUzbekBot.fetch_with_retry', new_callable=AsyncMock)
     def test_fetch_weather_data(self, mock_fetch):
