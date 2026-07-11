@@ -123,7 +123,11 @@ class TestSuperUzbekBot(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.aqi, "84")
         self.assertEqual(result.quality, "Unhealthy for Sensitive Groups")
-        mock_fetch.assert_awaited_once_with("https://www.iqair.com/ru/air-quality/uzbekistan/toshkent-shahri/tashkent")
+        mock_fetch.assert_awaited_once_with(
+            "https://www.iqair.com/ru/air-quality/uzbekistan/toshkent-shahri/tashkent",
+            max_retries=5,
+            delay=3,
+        )
 
     @patch('bot.SuperUzbekBot.fetch_with_retry', new_callable=AsyncMock)
     def test_fetch_weather_data(self, mock_fetch):

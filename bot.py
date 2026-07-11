@@ -136,7 +136,7 @@ class SuperUzbekBot:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'uz-UZ,uz;q=0.9,en;q=0.8,ru;q=0.7',
-            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Encoding': 'gzip, deflate',
             'DNT': '1',
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1'
@@ -299,8 +299,10 @@ class SuperUzbekBot:
             return cached_data
         
         try:
-            html = await self.fetch_with_retry(self.iqair_url)
-            if not html: return None
+            html = await self.fetch_with_retry(self.iqair_url, max_retries=5, delay=3)
+            if not html:
+                logger.error(f"IQAir sahifasidan havo sifati olinmadi: {self.iqair_url}")
+                return None
 
             soup = BeautifulSoup(html, 'html.parser')
             aqi_value = "N/A"
@@ -331,6 +333,10 @@ class SuperUzbekBot:
                     if element and element.text.strip():
                         aqi_value = re.sub(r'[^\d]', '', element.text.strip())
                         if aqi_value: break
+
+            if aqi_value == "N/A":
+                logger.error("IQAir sahifasidan AQI qiymati topilmadi")
+                return None
 
             quality_selectors = [('p', {'class': 'font-body-l-medium'}), ('div', {'class': 'level-name'})]
             for tag, attrs in quality_selectors:
