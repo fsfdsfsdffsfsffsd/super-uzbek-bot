@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import aiohttp
 from bs4 import BeautifulSoup
 import re
@@ -31,6 +31,12 @@ if sys.platform == "win32":
 
 # .env faylni yuklaymiz
 load_dotenv()
+
+TASHKENT_TZ = timezone(timedelta(hours=5), "Asia/Tashkent")
+
+
+def tashkent_now() -> datetime:
+    return datetime.now(TASHKENT_TZ)
 
 # Xavfsiz o'zgaruvchilar
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -225,7 +231,7 @@ class SuperUzbekBot:
                             logger.error("Namoz vaqtlarini olishda 5 urinishdan keyin ham xatolik!")
 
                 # Yangilanish vaqtini yozib qo'yamiz
-                self.last_update_time = datetime.now().strftime("%H:%M")
+                self.last_update_time = tashkent_now().strftime("%H:%M")
                 logger.info("Barcha ma'lumotlar muvaffaqiyatli yangilandi!")
 
                 # 5 daqiqa kutish
@@ -288,12 +294,12 @@ class SuperUzbekBot:
         return months.get(month_num, "")
 
     def get_formatted_date(self) -> str:
-        today = datetime.now()
+        today = tashkent_now()
         month_name = self.get_uzbek_month_name(today.month)
         return f"{today.year}-yil {today.day}-{month_name}"
 
     def get_hijri_date(self) -> str:
-        today = datetime.now()
+        today = tashkent_now()
         return f"{today.day:02d}.{today.month:02d}.{today.year}"
 
     # ========== HAVO SIFATI ==========
@@ -368,7 +374,7 @@ class SuperUzbekBot:
 
         return AirQualityData(
             aqi=aqi_value, quality=quality, pollutant=pollutant,
-            concentration=concentration, timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            concentration=concentration, timestamp=tashkent_now().strftime('%Y-%m-%d %H:%M:%S')
         )
 
     def extract_aqi_from_json_ld(self, soup: BeautifulSoup) -> Optional[str]:
@@ -516,7 +522,7 @@ class SuperUzbekBot:
 
             if len(prayer_times) >= 5:
                 result = PrayerData(
-                    times=prayer_times, date=datetime.now().strftime('%d.%m.%Y'),
+                    times=prayer_times, date=tashkent_now().strftime('%d.%m.%Y'),
                     hijri_date=self.get_hijri_date(), source="muslim.uz"
                 )
                 self._set_cached_data(cache_key, result)
@@ -588,7 +594,7 @@ class SuperUzbekBot:
                     d = {'name': b, 'buy': buy_banks.get(b, 0), 'sell': sell_banks.get(b, 0)}
                     if d['buy'] > 0 or d['sell'] > 0: banks_data.append(d)
                 
-                result = CurrencyData(banks=banks_data, timestamp=datetime.now().strftime('%d.%m.%Y %H:%M'))
+                result = CurrencyData(banks=banks_data, timestamp=tashkent_now().strftime('%d.%m.%Y %H:%M'))
                 self._set_cached_data(cache_key, result)
                 return result
         except Exception as e:
@@ -685,7 +691,7 @@ class SuperUzbekBot:
                 cond = cond_el.get_text(strip=True) if cond_el else "N/A"
                 periods[p_code] = {'name': p_name, 'temp': temp, 'condition': cond}
             
-            result = WeatherData(day=day_name, periods=periods, additional={}, timestamp=datetime.now().strftime('%d.%m.%Y %H:%M'))
+            result = WeatherData(day=day_name, periods=periods, additional={}, timestamp=tashkent_now().strftime('%d.%m.%Y %H:%M'))
             self._set_cached_data(cache_key, result)
             return result
         except Exception as e:
@@ -817,7 +823,7 @@ class SuperUzbekBot:
                 for t, v in zip(times[:8], values[:8]):
                     hourly_data.append({"time": t, "index": v})
 
-            result = MagneticData(date="Bugun", hourly_data=hourly_data, timestamp=datetime.now().strftime('%d.%m.%Y %H:%M'))
+            result = MagneticData(date="Bugun", hourly_data=hourly_data, timestamp=tashkent_now().strftime('%d.%m.%Y %H:%M'))
             self._set_cached_data(cache_key, result)
             return result
         except Exception as e:

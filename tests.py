@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch, AsyncMock
-from bot import SuperUzbekBot, PrayerData, PrayerTime, CurrencyData, AirQualityData, WeatherData, cache
+from bot import SuperUzbekBot, PrayerData, PrayerTime, CurrencyData, AirQualityData, WeatherData, cache, tashkent_now
 import asyncio
 from datetime import datetime
 
@@ -10,6 +10,12 @@ class TestSuperUzbekBot(unittest.TestCase):
         self.bot = SuperUzbekBot()
         # Mock session creation to avoid actual network init
         self.bot.session = MagicMock()
+
+    def test_tashkent_now_uses_utc_plus_five(self):
+        now = tashkent_now()
+
+        self.assertEqual(now.tzname(), "Asia/Tashkent")
+        self.assertEqual(now.utcoffset().total_seconds(), 5 * 60 * 60)
 
     def test_format_prayer_times(self):
         data = PrayerData(
