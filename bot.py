@@ -9,6 +9,7 @@ import ssl
 import certifi
 import os
 import sys
+from urllib.parse import urlencode
 # QO'SHILDI: .env faylni o'qish uchun
 from dotenv import load_dotenv
 
@@ -41,6 +42,7 @@ def tashkent_now() -> datetime:
 # Xavfsiz o'zgaruvchilar
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
+IQAIR_API_KEY = os.getenv("IQAIR_API_KEY")
 
 # Token borligini tekshirish (muhim!)
 if not BOT_TOKEN:
@@ -312,6 +314,11 @@ class SuperUzbekBot:
         if cached_data:
             return cached_data
 
+        api_result = await self.fetch_iqair_api_air_quality()
+        if api_result:
+            self._set_cached_data(cache_key, api_result, expiry=AIR_QUALITY_CACHE_TIME)
+            return api_result
+
         for url in self.iqair_urls:
             try:
                 html = await self.fetch_with_retry(url, max_retries=1, delay=1, request_timeout=8)
@@ -344,6 +351,54 @@ class SuperUzbekBot:
                 logger.error(f"IQAir browser fallback xato: {str(e)} - {url}")
 
         return None
+
+    async def fetch_iqair_api_air_quality(self) -> Optional[AirQualityData]:
+        if not IQAIR_API_KEY:
+            return None
+
+        params = {
+            "city": "Tashkent",
+            "state": "Toshkent Shahri",
+            "country": "Uzbekistan",
+            "key": IQAIR_API_KEY,
+        }
+        url = "https://api.airvisual.com/v2/city?" + urlencode(params)
+        payload = await self.fetch_with_retry(url, max_retries=1, delay=1, request_timeout=8)
+        if not payload:
+            return None
+
+        try:
+            data = json.loads(payload)
+            if data.get("status") != "success":
+                message = data.get("data", {}).get("message", "unknown")
+                logger.error(f"IQAir API xato: {message}")
+                return None
+
+            pollution = data["data"]["current"]["pollution"]
+            aqi_value = pollution.get("aqius")
+            if aqi_value is None:
+                logger.error("IQAir API javobida aqius topilmadi")
+                return None
+
+            pollutant_map = {
+                "p1": "PM10",
+                "p2": "PM2.5",
+                "o3": "O3",
+                "n2": "NO2",
+                "s2": "SO2",
+                "co": "CO",
+            }
+            pollutant = pollutant_map.get(str(pollution.get("mainus", "")).lower(), "N/A")
+            return AirQualityData(
+                aqi=str(aqi_value),
+                quality="IQAir API",
+                pollutant=pollutant,
+                concentration="N/A",
+                timestamp=tashkent_now().strftime('%Y-%m-%d %H:%M:%S'),
+            )
+        except Exception as e:
+            logger.error(f"IQAir API parse xato: {e}")
+            return None
 
     async def fetch_with_browser_impersonation(self, url: str) -> Optional[str]:
         try:
@@ -1200,12 +1255,20 @@ async def debug_air(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines = [f"version={AIR_DEBUG_VERSION}"]
     lines.append(f"chat_id={update.effective_chat.id}")
+    lines.append(f"iqair_api_key={'set' if IQAIR_API_KEY else 'missing'}")
 
     try:
-        import curl_cffi  # noqa: F401
+        from curl_cffi import requests as curl_requests
         lines.append("curl_cffi=ok")
     except Exception as e:
+        curl_requests = None
         lines.append(f"curl_cffi=error {e}")
+
+    try:
+        api_data = await bot.fetch_iqair_api_air_quality()
+        lines.append(f"api_aqi={api_data.aqi if api_data else 'none'}")
+    except Exception as e:
+        lines.append(f"api_error={e}")
 
     url = bot.iqair_urls[0]
     lines.append(f"url={url}")
@@ -1219,10 +1282,23 @@ async def debug_air(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"aiohttp_error={e}")
 
     try:
-        html = await bot.fetch_with_browser_impersonation(url)
-        parsed = bot.parse_iqair_air_quality(html) if html else None
-        lines.append(f"browser_html={bool(html)} len={len(html) if html else 0}")
-        lines.append(f"browser_aqi={parsed.aqi if parsed else 'none'}")
+        if curl_requests:
+            def request_page():
+                return curl_requests.get(
+                    url,
+                    timeout=12,
+                    impersonate="chrome",
+                    headers={
+                        "Accept-Language": "ru,en;q=0.9",
+                        "Accept-Encoding": "gzip, deflate",
+                    },
+                )
+
+            response = await asyncio.to_thread(request_page)
+            html = response.text if response.status_code == 200 else None
+            parsed = bot.parse_iqair_air_quality(html) if html else None
+            lines.append(f"browser_status={response.status_code} len={len(response.text)}")
+            lines.append(f"browser_aqi={parsed.aqi if parsed else 'none'}")
     except Exception as e:
         lines.append(f"browser_error={e}")
 
