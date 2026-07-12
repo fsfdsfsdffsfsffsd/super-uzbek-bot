@@ -167,6 +167,27 @@ class TestSuperUzbekBot(unittest.TestCase):
         self.assertEqual(mock_fetch.await_args_list[1].args[0], "https://www.iqair.com/air-quality/uzbekistan/toshkent-shahri/tashkent")
         self.assertEqual(mock_fetch.await_count, 2)
 
+    @patch('bot.SuperUzbekBot.fetch_with_browser_impersonation', new_callable=AsyncMock)
+    @patch('bot.SuperUzbekBot.fetch_with_retry', new_callable=AsyncMock)
+    def test_fetch_air_quality_uses_browser_fallback(self, mock_fetch, mock_browser_fetch):
+        html = """
+        <div class="line-clamp-2 flex flex-none flex-col items-center justify-center rounded-md p-2 aqi-legend-bg-yellow">
+            <p class="text-lg font-medium">74</p>
+            <span class="text-[10px] uppercase">AQI+ РЎРЁРђ</span>
+        </div>
+        """
+        mock_fetch.return_value = None
+        mock_browser_fetch.return_value = html
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(self.bot.fetch_air_quality())
+        loop.close()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.aqi, "74")
+        self.assertEqual(mock_browser_fetch.await_count, 1)
+
     @patch('bot.SuperUzbekBot.fetch_with_retry', new_callable=AsyncMock)
     def test_fetch_weather_data(self, mock_fetch):
         # Minimal mocked HTML for weather

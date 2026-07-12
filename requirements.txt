@@ -4,3 +4,4 @@ beautifulsoup4
 certifi
 python-dotenv
 Brotli
+curl_cffi

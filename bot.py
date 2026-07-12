@@ -310,7 +310,7 @@ class SuperUzbekBot:
         cached_data = self._get_cached_data(cache_key)
         if cached_data:
             return cached_data
-        
+
         for url in self.iqair_urls:
             try:
                 html = await self.fetch_with_retry(url, max_retries=1, delay=1, request_timeout=8)
@@ -327,7 +327,46 @@ class SuperUzbekBot:
             except Exception as e:
                 logger.error(f"Havo sifati xato: {str(e)} - {url}")
 
+        for url in self.iqair_urls:
+            try:
+                html = await self.fetch_with_browser_impersonation(url)
+                if not html:
+                    continue
+
+                result = self.parse_iqair_air_quality(html)
+                if result:
+                    self._set_cached_data(cache_key, result, expiry=AIR_QUALITY_CACHE_TIME)
+                    return result
+
+                logger.error(f"IQAir browser fallback sahifasidan AQI topilmadi: {url}")
+            except Exception as e:
+                logger.error(f"IQAir browser fallback xato: {str(e)} - {url}")
+
         return None
+
+    async def fetch_with_browser_impersonation(self, url: str) -> Optional[str]:
+        try:
+            from curl_cffi import requests
+        except Exception as e:
+            logger.error(f"curl_cffi yuklanmadi: {e}")
+            return None
+
+        def request_page() -> Optional[str]:
+            response = requests.get(
+                url,
+                timeout=12,
+                impersonate="chrome",
+                headers={
+                    "Accept-Language": "ru,en;q=0.9",
+                    "Accept-Encoding": "gzip, deflate",
+                },
+            )
+            if response.status_code != 200:
+                logger.error(f"IQAir browser fallback HTTP xato: {response.status_code} - {url}")
+                return None
+            return response.text
+
+        return await asyncio.to_thread(request_page)
 
     def parse_iqair_air_quality(self, html: str) -> Optional[AirQualityData]:
         soup = BeautifulSoup(html, 'html.parser')
