@@ -260,12 +260,13 @@ class SuperUzbekBot:
             await self.session.close()
             self.session = None
 
-    async def fetch_with_retry(self, url: str, max_retries: int = 3, delay: int = 2) -> Optional[str]:
+    async def fetch_with_retry(self, url: str, max_retries: int = 3, delay: int = 2, request_timeout: int = None) -> Optional[str]:
         session = await self.create_session()
         
         for attempt in range(max_retries):
             try:
-                async with session.get(url, ssl=False) as response:
+                timeout = aiohttp.ClientTimeout(total=request_timeout) if request_timeout else None
+                async with session.get(url, ssl=False, timeout=timeout) as response:
                     if response.status == 200:
                         return await response.text()
                     elif response.status == 429:
@@ -312,7 +313,7 @@ class SuperUzbekBot:
         
         for url in self.iqair_urls:
             try:
-                html = await self.fetch_with_retry(url, max_retries=5, delay=3)
+                html = await self.fetch_with_retry(url, max_retries=1, delay=1, request_timeout=8)
                 if not html:
                     logger.error(f"IQAir sahifasidan havo sifati olinmadi: {url}")
                     continue

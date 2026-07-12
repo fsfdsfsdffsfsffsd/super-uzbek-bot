@@ -133,8 +133,9 @@ class TestSuperUzbekBot(unittest.TestCase):
         self.assertEqual(cache["air_quality"]["expiry"], AIR_QUALITY_CACHE_TIME)
         mock_fetch.assert_awaited_once_with(
             "https://www.iqair.com/ru/air-quality/uzbekistan/toshkent-shahri/tashkent",
-            max_retries=5,
-            delay=3,
+            max_retries=1,
+            delay=1,
+            request_timeout=8,
         )
 
     @patch('bot.SuperUzbekBot.fetch_with_retry', new_callable=AsyncMock)
