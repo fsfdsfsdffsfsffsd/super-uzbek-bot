@@ -67,6 +67,7 @@ logger = logging.getLogger(__name__)
 cache = {}
 CACHE_TIME = 3600  # 1 soat (5 daqiqa o'rniga)
 AIR_QUALITY_CACHE_TIME = 60
+AIR_DEBUG_VERSION = "air-debug-2026-07-12-1"
 
 # Rate limiting
 last_request_time = {}
@@ -1193,6 +1194,40 @@ async def post_stop(application: Application):
     except Exception as e:
         logger.error(f"Stop error: {e}")
 
+async def debug_air(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not ADMIN_CHAT_ID or update.effective_chat.id != ADMIN_CHAT_ID:
+        return
+
+    lines = [f"version={AIR_DEBUG_VERSION}"]
+    lines.append(f"chat_id={update.effective_chat.id}")
+
+    try:
+        import curl_cffi  # noqa: F401
+        lines.append("curl_cffi=ok")
+    except Exception as e:
+        lines.append(f"curl_cffi=error {e}")
+
+    url = bot.iqair_urls[0]
+    lines.append(f"url={url}")
+
+    try:
+        html = await bot.fetch_with_retry(url, max_retries=1, delay=1, request_timeout=6)
+        parsed = bot.parse_iqair_air_quality(html) if html else None
+        lines.append(f"aiohttp_html={bool(html)} len={len(html) if html else 0}")
+        lines.append(f"aiohttp_aqi={parsed.aqi if parsed else 'none'}")
+    except Exception as e:
+        lines.append(f"aiohttp_error={e}")
+
+    try:
+        html = await bot.fetch_with_browser_impersonation(url)
+        parsed = bot.parse_iqair_air_quality(html) if html else None
+        lines.append(f"browser_html={bool(html)} len={len(html) if html else 0}")
+        lines.append(f"browser_aqi={parsed.aqi if parsed else 'none'}")
+    except Exception as e:
+        lines.append(f"browser_error={e}")
+
+    await update.message.reply_text("\n".join(lines))
+
 def main():
     if not BOT_TOKEN:
         print("BOT_TOKEN kiritilmagan!")
@@ -1201,6 +1236,7 @@ def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("debug_air", debug_air))
     application.add_handler(CallbackQueryHandler(inline_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
