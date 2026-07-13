@@ -69,7 +69,7 @@ logger = logging.getLogger(__name__)
 cache = {}
 CACHE_TIME = 3600  # 1 soat (5 daqiqa o'rniga)
 AIR_QUALITY_CACHE_TIME = 600  # IQAir API limitini asrash uchun 10 daqiqa
-AIR_DEBUG_VERSION = "air-debug-2026-07-12-1"
+AIR_DEBUG_VERSION = "air-debug-2026-07-13-cache-10m"
 
 # Rate limiting
 last_request_time = {}
@@ -1256,6 +1256,7 @@ async def debug_air(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = [f"version={AIR_DEBUG_VERSION}"]
     lines.append(f"chat_id={update.effective_chat.id}")
     lines.append(f"iqair_api_key={'set' if IQAIR_API_KEY else 'missing'}")
+    lines.append(f"air_cache_seconds={AIR_QUALITY_CACHE_TIME}")
 
     try:
         from curl_cffi import requests as curl_requests
