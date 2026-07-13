@@ -165,6 +165,35 @@ class TestSuperUzbekBot(unittest.TestCase):
         self.assertEqual(result.pollutant, "PM2.5")
         self.assertIn("api.airvisual.com/v2/city", mock_fetch.await_args.args[0])
 
+    @patch('bot.IQAIR_API_KEY', 'test-key')
+    @patch('bot.SuperUzbekBot.fetch_with_retry', new_callable=AsyncMock)
+    def test_fetch_air_quality_reuses_cache_for_ten_minutes(self, mock_fetch):
+        mock_fetch.return_value = """
+        {
+            "status": "success",
+            "data": {
+                "current": {
+                    "pollution": {
+                        "aqius": 56,
+                        "mainus": "p2"
+                    }
+                }
+            }
+        }
+        """
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        first = loop.run_until_complete(self.bot.fetch_air_quality())
+        second = loop.run_until_complete(self.bot.fetch_air_quality())
+        loop.close()
+
+        self.assertEqual(first.aqi, "56")
+        self.assertEqual(second.aqi, "56")
+        self.assertIs(first, second)
+        self.assertEqual(cache["air_quality"]["expiry"], 600)
+        self.assertEqual(mock_fetch.await_count, 1)
+
     @patch('bot.SuperUzbekBot.fetch_with_retry', new_callable=AsyncMock)
     def test_fetch_air_quality_uses_iqair_fallback_url(self, mock_fetch):
         html = """
