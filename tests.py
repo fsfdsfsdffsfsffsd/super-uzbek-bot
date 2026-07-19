@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch, AsyncMock
-from bot import SuperUzbekBot, PrayerData, PrayerTime, CurrencyData, AirQualityData, WeatherData, cache, tashkent_now, AIR_QUALITY_CACHE_TIME
+from bot import SuperUzbekBot, PrayerData, PrayerTime, CurrencyData, AirQualityData, WeatherData, MagneticData, cache, tashkent_now, AIR_QUALITY_CACHE_TIME, prayer_cache_seconds_until_refresh
 import asyncio
 from datetime import datetime
 
@@ -16,6 +16,43 @@ class TestSuperUzbekBot(unittest.TestCase):
 
         self.assertEqual(now.tzname(), "Asia/Tashkent")
         self.assertEqual(now.utcoffset().total_seconds(), 5 * 60 * 60)
+
+    def test_prayer_cache_expires_at_next_midnight(self):
+        seconds = prayer_cache_seconds_until_refresh(datetime(2026, 7, 16, 1, 0, 0))
+
+        self.assertEqual(seconds, 23 * 60 * 60)
+
+    def test_prayer_cache_before_midnight_expires_today(self):
+        seconds = prayer_cache_seconds_until_refresh(datetime(2026, 7, 16, 23, 59, 30))
+
+        self.assertEqual(seconds, 30)
+
+    @patch("bot.tashkent_now")
+    def test_format_magnetic_data_matches_compact_design(self, mock_now):
+        mock_now.return_value = datetime(2026, 7, 19, 12, 0, 0)
+        data = MagneticData(
+            date="Bugun",
+            hourly_data=[
+                {"time": "2:00", "index": "4"},
+                {"time": "05:00", "index": "5"},
+                {"time": "08:00", "index": "6"},
+                {"time": "11:00", "index": "7"},
+                {"time": "14:00", "index": "8"},
+            ],
+            timestamp="19.07.2026 12:00",
+        )
+
+        result = self.bot.format_magnetic_data(data)
+
+        self.assertIn("🧲 *Magnit bo'roni*", result)
+        self.assertIn("📅 19-iyul, 2026", result)
+        self.assertIn("🕘 02:00  🟢", result)
+        self.assertIn("🕘 05:00  🟡", result)
+        self.assertIn("🕘 08:00  🟠", result)
+        self.assertIn("🕘 11:00  🔴", result)
+        self.assertIn("🕘 14:00  🟣", result)
+        self.assertIn("🟡 Kuchsiz magnit bo'ron", result)
+        self.assertNotIn("ball", result)
 
     def test_format_prayer_times(self):
         data = PrayerData(
@@ -76,6 +113,7 @@ class TestSuperUzbekBot(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.times[PrayerTime.BOMDOD], "05:00")
         self.assertEqual(result.times[PrayerTime.XUFTON], "19:30")
+        self.assertGreater(cache["prayer_times"]["expiry"], 1)
 
     @patch('bot.SuperUzbekBot.fetch_with_retry', new_callable=AsyncMock)
     def test_get_currency_rates(self, mock_fetch):

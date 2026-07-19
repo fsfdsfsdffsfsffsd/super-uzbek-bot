@@ -39,6 +39,14 @@ TASHKENT_TZ = timezone(timedelta(hours=5), "Asia/Tashkent")
 def tashkent_now() -> datetime:
     return datetime.now(TASHKENT_TZ)
 
+
+def prayer_cache_seconds_until_refresh(now: Optional[datetime] = None) -> int:
+    now = now or tashkent_now()
+    next_refresh = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if now >= next_refresh:
+        next_refresh += timedelta(days=1)
+    return max(1, int((next_refresh - now).total_seconds()))
+
 # Xavfsiz o'zgaruvchilar
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
@@ -158,6 +166,7 @@ class SuperUzbekBot:
         }
         self.session = None
         self.background_task = None  # Fon yangilash vazifasi (toza to'xtatish uchun)
+        self.prayer_background_task = None
 
     async def start_background_tasks(self):
         """Ma'lumotlarni har 5 daqiqada yangilash (1000 foydalanuvchi uchun optimallashtirildi)"""
@@ -209,30 +218,6 @@ class SuperUzbekBot:
                 if magnetic_3day:
                     self.cached_magnetic_3day = magnetic_3day
 
-                await asyncio.sleep(5)
-
-                # 7. Namoz vaqtlari (OXIRIDA - qayta urinish bilan)
-                logger.info("⏳ Namoz vaqtlari yangilanmoqda...")
-                prayer_attempt = 0
-                max_prayer_attempts = 5
-                prayer_data = None
-            
-                while prayer_attempt < max_prayer_attempts and prayer_data is None:
-                    prayer_attempt += 1
-                    logger.info(f"Namoz vaqtlari: {prayer_attempt}-urinish...")
-                    prayer_data = await self.get_prayer_times()
-                    
-                    if prayer_data:
-                        self.cached_prayer = prayer_data
-                        logger.info("Namoz vaqtlari muvaffaqiyatli olindi!")
-                    else:
-                        if prayer_attempt < max_prayer_attempts:
-                            wait_time = 10
-                            logger.warning(f"Namoz vaqtlari olinmadi. {wait_time} soniyadan keyin qayta uriniladi...")
-                            await asyncio.sleep(wait_time)
-                        else:
-                            logger.error("Namoz vaqtlarini olishda 5 urinishdan keyin ham xatolik!")
-
                 # Yangilanish vaqtini yozib qo'yamiz
                 self.last_update_time = tashkent_now().strftime("%H:%M")
                 logger.info("Barcha ma'lumotlar muvaffaqiyatli yangilandi!")
@@ -243,6 +228,32 @@ class SuperUzbekBot:
             except Exception as e:
                 logger.error(f"Background task xatosi: {e}")
                 await asyncio.sleep(60)
+
+    async def start_prayer_background_task(self):
+        """Namoz vaqtlarini alohida kunlik jadval bilan yangilash."""
+        retry_seconds = 300
+        while True:
+            try:
+                logger.info("Namoz vaqtlari kunlik yangilanishi tekshirilmoqda...")
+                prayer_data = await self.get_prayer_times()
+                if prayer_data:
+                    self.cached_prayer = prayer_data
+                    sleep_seconds = prayer_cache_seconds_until_refresh()
+                    logger.info(
+                        "Namoz vaqtlari tayyor. Keyingi tekshiruv %s soniyadan keyin.",
+                        sleep_seconds,
+                    )
+                    await asyncio.sleep(sleep_seconds)
+                else:
+                    self.cached_prayer = None
+                    logger.warning(
+                        "Namoz vaqtlari olinmadi. %s soniyadan keyin qayta uriniladi.",
+                        retry_seconds,
+                    )
+                    await asyncio.sleep(retry_seconds)
+            except Exception as e:
+                logger.error(f"Namoz background task xatosi: {e}")
+                await asyncio.sleep(retry_seconds)
 
     async def create_session(self):
         """Asinxron session yaratish"""
@@ -621,7 +632,7 @@ class SuperUzbekBot:
                     times=prayer_times, date=tashkent_now().strftime('%d.%m.%Y'),
                     hijri_date=self.get_hijri_date(), source="muslim.uz"
                 )
-                self._set_cached_data(cache_key, result)
+                self._set_cached_data(cache_key, result, expiry=prayer_cache_seconds_until_refresh())
                 return result
             return None
         except Exception as e:
@@ -984,13 +995,17 @@ class SuperUzbekBot:
 
     def format_magnetic_data(self, data: MagneticData) -> str:
         if not data: return "❌ Magnit bo'roni ma'lumotlarini olishda xatolik"
-        
+
+        today = tashkent_now()
+        magnetic_date = (
+            f"{today.day}-{self.get_uzbek_month_name(today.month)}, {today.year}"
+        )
         result = (
-            f"🧲 *Magnit Bo'ronlari*\n"
-            f"📅 {self.get_formatted_date()}\n"
+            f"🧲 *Magnit bo'roni*\n"
+            f"📅 {magnetic_date}\n"
             f"📍 Toshkent shahri\n\n"
         )
-        
+
         for item in data.hourly_data:
             try:
                 idx = int(item['index'])
@@ -1005,16 +1020,16 @@ class SuperUzbekBot:
             time_str = item['time']
             if len(time_str) == 4 and time_str[1] == ':':
                 time_str = "0" + time_str
-                
-            result += f"{emoji} {time_str} — {item['index']} ball\n"
-            
+
+            result += f"🕘 {time_str}  {emoji}\n"
+
         result += (
-            f"\n*Ballar shkalasi:*\n"
-            f"4 ball — Tinch holat\n"
-            f"5 ball — Kuchsiz bo'ron\n"
-            f"6 ball — O'rtacha bo'ron\n"
-            f"7 ball — Kuchli bo'ron\n"
-            f"8 ball — Juda kuchli bo'ron\n\n"
+            f"\n────────────────────\n\n"
+            f"🟢 Tinch holat\n"
+            f"🟡 Kuchsiz magnit bo'ron\n"
+            f"🟠 O'rtacha magnit bo'ron\n"
+            f"🔴 Kuchli magnit bo'ron\n"
+            f"🟣 Juda kuchli magnit bo'ron\n\n"
             f"_Ma'lumot gismeteo.ru saytidan olindi_"
         )
         return result
@@ -1130,8 +1145,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. Namoz
     if "Namoz" in text:
         await send_typing_action(chat_id, context)
-        if not bot.cached_prayer:  # Cache bo'sh bo'lsa (sovuq start) — darhol yuklaymiz
-            bot.cached_prayer = await bot.get_prayer_times()
+        bot.cached_prayer = await bot.get_prayer_times()
         if bot.cached_prayer:
             response = bot.format_prayer_times(bot.cached_prayer)
         else:
@@ -1231,6 +1245,7 @@ async def post_init(application: Application):
         await bot.create_session()
         # Fon vazifasini saqlaymiz — to'xtaganda toza bekor qilish uchun
         bot.background_task = asyncio.create_task(bot.start_background_tasks())
+        bot.prayer_background_task = asyncio.create_task(bot.start_prayer_background_task())
         logger.info("Bot ishga tushdi va background tasklar boshlandi")
     except Exception as e:
         logger.error(f"Start error: {e}")
@@ -1242,6 +1257,12 @@ async def post_stop(application: Application):
             bot.background_task.cancel()
             try:
                 await bot.background_task
+            except asyncio.CancelledError:
+                pass
+        if bot.prayer_background_task and not bot.prayer_background_task.done():
+            bot.prayer_background_task.cancel()
+            try:
+                await bot.prayer_background_task
             except asyncio.CancelledError:
                 pass
         await bot.close_session()
