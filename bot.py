@@ -1038,7 +1038,7 @@ class SuperUzbekBot:
                     f"{emoji} {status}\n\n"
                 )
 
-            result_text += "_gismeteo.ru_"
+            result_text += "_Ma'lumot gismeteo.ru saytidan olindi_"
             
             return result_text
 

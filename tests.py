@@ -114,7 +114,7 @@ class TestSuperUzbekBot(unittest.TestCase):
         self.assertIn("🟠 O'rtacha bo'ron", result)
         self.assertIn("📅 *Indinga · 19-avgust, 2026*", result)
         self.assertIn("🔴 Kuchli bo'ron", result)
-        self.assertIn("_gismeteo.ru_", result)
+        self.assertIn("_Ma'lumot gismeteo.ru saytidan olindi_", result)
         self.assertNotIn("K-indeks:", result)
         self.assertNotIn("━━━━━━━━", result)
         self.assertNotIn("K-indeks oshgan sari", result)
