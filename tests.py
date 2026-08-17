@@ -106,12 +106,20 @@ class TestSuperUzbekBot(unittest.TestCase):
 
         result = asyncio.run(self.bot.fetch_3day_magnetic_forecast())
 
-        self.assertIn("📅 *17-avgust, 2026*", result)
-        self.assertIn("🟡 5-ball — Kuchsiz bo'ron", result)
-        self.assertIn("📅 *18-avgust, 2026*", result)
-        self.assertIn("🟠 6-ball — O'rtacha bo'ron", result)
-        self.assertIn("📅 *19-avgust, 2026*", result)
-        self.assertIn("🔴 7-ball — Kuchli bo'ron", result)
+        self.assertIn("🧲 *3 kunlik magnit prognozi*", result)
+        self.assertIn("📍 Toshkent shahri", result)
+        self.assertIn("📅 *Bugun — 17-avgust, 2026*", result)
+        self.assertIn("🟡 *Kuchsiz bo'ron*", result)
+        self.assertIn("📊 Eng yuqori K-indeks: *5 / 9*", result)
+        self.assertIn("📅 *Ertaga — 18-avgust, 2026*", result)
+        self.assertIn("🟠 *O'rtacha bo'ron*", result)
+        self.assertIn("📊 Eng yuqori K-indeks: *6 / 9*", result)
+        self.assertIn("📅 *Indinga — 19-avgust, 2026*", result)
+        self.assertIn("🔴 *Kuchli bo'ron*", result)
+        self.assertIn("📊 Eng yuqori K-indeks: *7 / 9*", result)
+        self.assertIn("🟢 0–4 — Tinch", result)
+        self.assertIn("🟣 8–9 — Juda kuchli", result)
+        self.assertNotIn("-ball", result)
 
     def test_format_prayer_times(self):
         data = PrayerData(

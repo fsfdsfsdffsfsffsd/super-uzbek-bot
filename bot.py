@@ -1010,10 +1010,15 @@ class SuperUzbekBot:
             if not forecast_dates:
                 return "❌ Ma'lumot topilmadi."
 
-            result_text = "🧲 *Keyingi 3 kunlik holat:*\n\n"
-            for day in forecast_dates:
+            result_text = (
+                "🧲 *3 kunlik magnit prognozi*\n"
+                "📍 Toshkent shahri\n\n"
+                "━━━━━━━━━━━━━━━━\n\n"
+            )
+            day_labels = ["Bugun", "Ertaga", "Indinga"]
+
+            for day_number, day in enumerate(forecast_dates):
                 idx = max(daily_indexes[day])
-                k_index = str(idx)
                 clean_date = f"{day.day}-{self.get_uzbek_month_name(day.month)}, {day.year}"
 
                 if idx <= 4: 
@@ -1030,9 +1035,21 @@ class SuperUzbekBot:
                     emoji, status = "⚪", "Noma'lum"
 
                 result_text += (
-                    f"📅 *{clean_date}*\n"
-                    f"{emoji} {k_index}-ball — {status}\n\n"
+                    f"📅 *{day_labels[day_number]} — {clean_date}*\n"
+                    f"{emoji} *{status}*\n"
+                    f"📊 Eng yuqori K-indeks: *{idx} / 9*\n\n"
                 )
+
+            result_text += (
+                "━━━━━━━━━━━━━━━━\n\n"
+                "ℹ️ K-indeks oshgan sari magnit faolligi kuchayadi.\n\n"
+                "🟢 0–4 — Tinch\n"
+                "🟡 5 — Kuchsiz\n"
+                "🟠 6 — O'rtacha\n"
+                "🔴 7 — Kuchli\n"
+                "🟣 8–9 — Juda kuchli\n\n"
+                "_Ma'lumot gismeteo.ru saytidan olindi_"
+            )
             
             return result_text
 
