@@ -380,5 +380,38 @@ class TestSuperUzbekBot(unittest.TestCase):
         self.assertEqual(result.periods['m']['temp'], "+10")
         self.assertEqual(result.periods['d']['condition'], "Cloudy")
 
+    def test_get_weather_emoji_matches_condition(self):
+        cases = {
+            "Ochiq": "☀️",
+            "Quyoshli": "☀️",
+            "Ochiq bulutli": "🌤️",
+            "Bulutli": "☁️",
+            "Yengil yomg'ir": "🌧️",
+            "Qor": "❄️",
+            "Yomg'ir va qor": "🌨️",
+            "Tuman": "🌫️",
+            "Momaqaldiroq": "🌩️",
+        }
+
+        for condition, expected in cases.items():
+            with self.subTest(condition=condition):
+                self.assertEqual(self.bot.get_weather_emoji(condition), expected)
+
+    @patch('bot.SuperUzbekBot.fetch_with_retry', new_callable=AsyncMock)
+    def test_fetch_3day_forecast_uses_condition_emoji(self, mock_fetch):
+        mock_fetch.return_value = """
+        <article class="AppForecastDay_container__AnH4J">
+            <h3 class="AppForecastDayHeader_dayTitle__23ecF">Bugun, 17-avgust</h3>
+            <div style="grid-area:d-temp">+34°</div>
+            <div style="grid-area:n-temp">+25°</div>
+            <div style="grid-area:d-text">Ochiq</div>
+        </article>
+        """
+
+        result = asyncio.run(self.bot.fetch_3day_forecast())
+
+        self.assertIn("☀️ Ochiq", result)
+        self.assertNotIn("☁️ Ochiq", result)
+
 if __name__ == '__main__':
     unittest.main()

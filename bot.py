@@ -838,12 +838,13 @@ class SuperUzbekBot:
                 cond_tag = article.find('div', style=re.compile("grid-area:d-text"))
                 condition = cond_tag.get_text(strip=True) if cond_tag else ""
                 condition = self.translate_weather_condition(condition)
+                condition_emoji = self.get_weather_emoji(condition)
 
                 result_text += (
                     f"🗓 *{title}*\n"
                     f"☀️ Kunduzi: *{day_temp}*\n"
                     f"🌙 Kechasi: *{night_temp}*\n"
-                    f"☁️ {condition}\n\n"
+                    f"{condition_emoji} {condition}\n\n"
                 )
             
             result_text += "_Ma'lumot yandex.uz saytidan olindi_"
@@ -893,10 +894,35 @@ class SuperUzbekBot:
 
     def get_weather_emoji(self, condition: str) -> str:
         c = condition.lower()
-        if "quyosh" in c or "clear" in c: return "☀️"
-        if "bulut" in c or "cloud" in c: return "☁️"
-        if "yomg'ir" in c or "rain" in c: return "🌧️"
-        if "qor" in c or "snow" in c: return "❄️"
+        if any(word in c for word in ("momaqaldiroq", "thunder", "гроза")):
+            return "🌩️"
+        if (
+            any(word in c for word in ("yomg", "rain", "дожд"))
+            and any(word in c for word in ("qor", "snow", "снег"))
+        ):
+            return "🌨️"
+        if any(word in c for word in ("qor", "snow", "снег")):
+            return "❄️"
+        if any(word in c for word in ("yomg", "rain", "drizzle", "дожд")):
+            return "🌧️"
+        if any(word in c for word in ("tuman", "fog", "mist", "туман")):
+            return "🌫️"
+        if any(
+            word in c
+            for word in (
+                "ochiq bulut",
+                "o'zgaruvchan",
+                "o‘zgaruvchan",
+                "partly cloudy",
+                "переменная",
+                "прояснен",
+            )
+        ):
+            return "🌤️"
+        if any(word in c for word in ("ochiq", "quyosh", "clear", "ясно")):
+            return "☀️"
+        if any(word in c for word in ("bulut", "cloud", "облач", "пасмур")):
+            return "☁️"
         return "🌤️"
 
     def format_weather_data_md(self, data: dict) -> str:
