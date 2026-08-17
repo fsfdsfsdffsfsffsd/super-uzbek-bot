@@ -1012,8 +1012,7 @@ class SuperUzbekBot:
 
             result_text = (
                 "🧲 *3 kunlik magnit prognozi*\n"
-                "📍 Toshkent shahri\n\n"
-                "━━━━━━━━━━━━━━━━\n\n"
+                "📍 Toshkent\n\n"
             )
             day_labels = ["Bugun", "Ertaga", "Indinga"]
 
@@ -1035,21 +1034,11 @@ class SuperUzbekBot:
                     emoji, status = "⚪", "Noma'lum"
 
                 result_text += (
-                    f"📅 *{day_labels[day_number]} — {clean_date}*\n"
-                    f"{emoji} *{status}*\n"
-                    f"📊 Eng yuqori K-indeks: *{idx} / 9*\n\n"
+                    f"📅 *{day_labels[day_number]} · {clean_date}*\n"
+                    f"{emoji} {status}  ·  K-indeks: *{idx}*\n\n"
                 )
 
-            result_text += (
-                "━━━━━━━━━━━━━━━━\n\n"
-                "ℹ️ K-indeks oshgan sari magnit faolligi kuchayadi.\n\n"
-                "🟢 0–4 — Tinch\n"
-                "🟡 5 — Kuchsiz\n"
-                "🟠 6 — O'rtacha\n"
-                "🔴 7 — Kuchli\n"
-                "🟣 8–9 — Juda kuchli\n\n"
-                "_Ma'lumot gismeteo.ru saytidan olindi_"
-            )
+            result_text += "_gismeteo.ru_"
             
             return result_text
 
