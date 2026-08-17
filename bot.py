@@ -1035,7 +1035,7 @@ class SuperUzbekBot:
 
                 result_text += (
                     f"📅 *{day_labels[day_number]} · {clean_date}*\n"
-                    f"{emoji} {status}  ·  K-indeks: *{idx}*\n\n"
+                    f"{emoji} {status}\n\n"
                 )
 
             result_text += "_gismeteo.ru_"
