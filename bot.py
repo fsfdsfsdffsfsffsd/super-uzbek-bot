@@ -145,7 +145,10 @@ class SuperUzbekBot:
         self.bank_url = "https://bank.uz/uz/currency"
         self.weather_url = "https://yandex.uz/pogoda/ru/tashkent?lat=41.330278&lon=69.337088"
         self.forecast_url = "https://yandex.uz/pogoda/ru/tashkent?lat=41.311151&lon=69.279737"
-        self.magnetic_url = "https://www.gismeteo.ru/weather-tashkent-5331/gm/"
+        # Gismeteo'ning eski /gm/ sahifasidagi jadval endi bo'sh keladi.
+        # K-indekslar asosiy prognoz sahifalaridagi geomagnetic qatorida bor.
+        self.magnetic_url = "https://www.gismeteo.ru/weather-tashkent-5331/"
+        self.magnetic_forecast_url = "https://www.gismeteo.ru/weather-tashkent-5331/3-days/"
         self.cached_currency = None
         self.cached_weather = None
         self.cached_prayer = None
@@ -919,16 +922,32 @@ class SuperUzbekBot:
             html = await self.fetch_with_retry(self.magnetic_url)
             if not html: return None
             soup = BeautifulSoup(html, 'html.parser')
-            wrap = soup.find('div', class_='gm-wrap')
-            if not wrap: return None
 
-            times = [t.text.strip() for t in wrap.find_all('div', class_='time')]
-            values = [v.text.strip() for v in wrap.find_all('div', class_='value')]
-            
+            time_nodes = soup.select('.widget-row-datetime-time time-value[timestamp]')
+            value_nodes = soup.select('.widget-row-geomagnetic .row-item .item')
+            if not time_nodes or len(time_nodes) != len(value_nodes):
+                logger.error(
+                    "Gismeteo magnit qatori topilmadi yoki ustunlar soni mos emas: "
+                    f"vaqt={len(time_nodes)}, qiymat={len(value_nodes)}"
+                )
+                return None
+
             hourly_data = []
-            if times and values:
-                for t, v in zip(times[:8], values[:8]):
-                    hourly_data.append({"time": t, "index": v})
+            for time_node, value_node in zip(time_nodes[:8], value_nodes[:8]):
+                timestamp = time_node.get('timestamp', '')
+                index = value_node.get_text(strip=True)
+                if not timestamp.isdigit() or not re.fullmatch(r'[0-9]', index):
+                    logger.error("Gismeteo magnit qatorida noto'g'ri qiymat topildi")
+                    return None
+
+                local_time = datetime.fromtimestamp(int(timestamp), TASHKENT_TZ)
+                hourly_data.append({
+                    "time": local_time.strftime('%H:%M'),
+                    "index": index,
+                })
+
+            if not hourly_data:
+                return None
 
             result = MagneticData(date="Bugun", hourly_data=hourly_data, timestamp=tashkent_now().strftime('%d.%m.%Y %H:%M'))
             self._set_cached_data(cache_key, result)
@@ -940,33 +959,62 @@ class SuperUzbekBot:
     async def fetch_3day_magnetic_forecast(self) -> str:
         """3 kunlik magnit bo'roni prognozi (YANGILANGAN DIZAYN)"""
         try:
-            html = await self.fetch_with_retry(self.magnetic_url)
+            html = await self.fetch_with_retry(self.magnetic_forecast_url)
             if not html: return "❌ Ma'lumot olishda xatolik."
 
             soup = BeautifulSoup(html, 'html.parser')
-            
-            date_divs = soup.find_all('div', class_=re.compile("date"))
-            value_divs = soup.find_all('div', class_=re.compile("value"))
 
-            if not date_divs or not value_divs:
-                 return "❌ Ma'lumot topilmadi."
+            time_nodes = soup.select('.widget-row-datetime-time time-value[timestamp]')
+            value_nodes = soup.select('.widget-row-geomagnetic .row-item .item')
+            daily_indexes = {}
+            today = tashkent_now().date()
+
+            if time_nodes and len(time_nodes) == len(value_nodes):
+                for time_node, value_node in zip(time_nodes, value_nodes):
+                    timestamp = time_node.get('timestamp', '')
+                    index = value_node.get_text(strip=True)
+                    if not timestamp.isdigit() or not re.fullmatch(r'[0-9]', index):
+                        continue
+
+                    local_date = datetime.fromtimestamp(int(timestamp), TASHKENT_TZ).date()
+                    daily_indexes.setdefault(local_date, []).append(int(index))
+            else:
+                # Gismeteo ko'p kunlik sahifada timestamp o'rniga har bir kun
+                # uchun "tun/ertalab/kunduz/kechqurun" kabi 4 ta ustun beradi.
+                date_nodes = soup.select('.widget-row-tod-date .row-item')
+                if (
+                    not value_nodes
+                    or not date_nodes
+                    or len(value_nodes) % len(date_nodes) != 0
+                ):
+                    logger.error(
+                        "Gismeteo 3 kunlik magnit qatori topilmadi yoki ustunlar soni mos emas: "
+                        f"sana={len(date_nodes)}, vaqt={len(time_nodes)}, "
+                        f"qiymat={len(value_nodes)}"
+                    )
+                    return "❌ Ma'lumot topilmadi."
+
+                periods_per_day = len(value_nodes) // len(date_nodes)
+                for day_offset in range(len(date_nodes)):
+                    start = day_offset * periods_per_day
+                    end = start + periods_per_day
+                    indexes = [
+                        int(node.get_text(strip=True))
+                        for node in value_nodes[start:end]
+                        if re.fullmatch(r'[0-9]', node.get_text(strip=True))
+                    ]
+                    if indexes:
+                        daily_indexes[today + timedelta(days=day_offset)] = indexes
+
+            forecast_dates = [day for day in sorted(daily_indexes) if day >= today][:3]
+            if not forecast_dates:
+                return "❌ Ma'lumot topilmadi."
 
             result_text = "🧲 *Keyingi 3 kunlik holat:*\n\n"
-            
-            count = 0
-            for i in range(len(date_divs)):
-                if count >= 3: break
-                
-                raw_date = date_divs[i].get_text(strip=True)
-                clean_date = self.translate_date_to_uz(raw_date) 
-                
-                try:
-                    k_index = value_divs[i].get_text(strip=True)
-                    if len(k_index) > 2: k_index = k_index[:1]
-                    idx = int(k_index)
-                except:
-                    k_index = "?"
-                    idx = 0
+            for day in forecast_dates:
+                idx = max(daily_indexes[day])
+                k_index = str(idx)
+                clean_date = f"{day.day}-{self.get_uzbek_month_name(day.month)}, {day.year}"
 
                 if idx <= 4: 
                     emoji, status = "🟢", "Tinch holat"
@@ -985,7 +1033,6 @@ class SuperUzbekBot:
                     f"📅 *{clean_date}*\n"
                     f"{emoji} {k_index}-ball — {status}\n\n"
                 )
-                count += 1
             
             return result_text
 

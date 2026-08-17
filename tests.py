@@ -54,6 +54,65 @@ class TestSuperUzbekBot(unittest.TestCase):
         self.assertIn("🟡 Kuchsiz magnit bo'ron", result)
         self.assertNotIn("ball", result)
 
+    @patch('bot.SuperUzbekBot.fetch_with_retry', new_callable=AsyncMock)
+    def test_fetch_magnetic_storms_parses_gismeteo_geomagnetic_row(self, mock_fetch):
+        mock_fetch.return_value = """
+        <div class="widget-row-datetime-time">
+            <div class="row-item"><time-value timestamp="1786924800"></time-value></div>
+            <div class="row-item"><time-value timestamp="1786935600"></time-value></div>
+        </div>
+        <div class="widget-row-geomagnetic">
+            <div class="row-item"><div class="item item-2">2</div></div>
+            <div class="row-item"><div class="item item-5">5</div></div>
+        </div>
+        """
+
+        result = asyncio.run(self.bot.fetch_magnetic_storms())
+
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            result.hourly_data,
+            [
+                {"time": "05:00", "index": "2"},
+                {"time": "08:00", "index": "5"},
+            ],
+        )
+
+    @patch("bot.tashkent_now")
+    @patch('bot.SuperUzbekBot.fetch_with_retry', new_callable=AsyncMock)
+    def test_fetch_3day_magnetic_forecast_uses_daily_maximum(self, mock_fetch, mock_now):
+        mock_now.return_value = datetime(2026, 8, 17, 12, 0, 0)
+        mock_fetch.return_value = """
+        <div class="widget-row-tod-date">
+            <a class="row-item">17 avgust</a>
+            <a class="row-item">18 avgust</a>
+            <a class="row-item">19 avgust</a>
+        </div>
+        <div class="widget-row-geomagnetic">
+            <div class="row-item"><div class="item">2</div></div>
+            <div class="row-item"><div class="item">3</div></div>
+            <div class="row-item"><div class="item">4</div></div>
+            <div class="row-item"><div class="item">5</div></div>
+            <div class="row-item"><div class="item">3</div></div>
+            <div class="row-item"><div class="item">4</div></div>
+            <div class="row-item"><div class="item">5</div></div>
+            <div class="row-item"><div class="item">6</div></div>
+            <div class="row-item"><div class="item">4</div></div>
+            <div class="row-item"><div class="item">5</div></div>
+            <div class="row-item"><div class="item">6</div></div>
+            <div class="row-item"><div class="item">7</div></div>
+        </div>
+        """
+
+        result = asyncio.run(self.bot.fetch_3day_magnetic_forecast())
+
+        self.assertIn("📅 *17-avgust, 2026*", result)
+        self.assertIn("🟡 5-ball — Kuchsiz bo'ron", result)
+        self.assertIn("📅 *18-avgust, 2026*", result)
+        self.assertIn("🟠 6-ball — O'rtacha bo'ron", result)
+        self.assertIn("📅 *19-avgust, 2026*", result)
+        self.assertIn("🔴 7-ball — Kuchli bo'ron", result)
+
     def test_format_prayer_times(self):
         data = PrayerData(
             times={
