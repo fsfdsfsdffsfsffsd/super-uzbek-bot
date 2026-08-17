@@ -1,6 +1,7 @@
 import unittest
+import logging
 from unittest.mock import MagicMock, patch, AsyncMock
-from bot import SuperUzbekBot, PrayerData, PrayerTime, CurrencyData, AirQualityData, WeatherData, MagneticData, cache, tashkent_now, AIR_QUALITY_CACHE_TIME, prayer_cache_seconds_until_refresh
+from bot import SuperUzbekBot, PrayerData, PrayerTime, CurrencyData, AirQualityData, WeatherData, MagneticData, cache, tashkent_now, AIR_QUALITY_CACHE_TIME, prayer_cache_seconds_until_refresh, redact_sensitive_text
 import asyncio
 from datetime import datetime
 
@@ -26,6 +27,24 @@ class TestSuperUzbekBot(unittest.TestCase):
         seconds = prayer_cache_seconds_until_refresh(datetime(2026, 7, 16, 23, 59, 30))
 
         self.assertEqual(seconds, 30)
+
+    def test_logging_does_not_write_files_or_expose_secrets(self):
+        file_handlers = [
+            handler
+            for handler in logging.getLogger().handlers
+            if isinstance(handler, logging.FileHandler)
+        ]
+        message = (
+            "https://api.telegram.org/bot123456:SECRET/getUpdates"
+            "?token=my-token&key=my-api-key"
+        )
+        redacted = redact_sensitive_text(message)
+
+        self.assertEqual(file_handlers, [])
+        self.assertNotIn("123456:SECRET", redacted)
+        self.assertNotIn("my-token", redacted)
+        self.assertNotIn("my-api-key", redacted)
+        self.assertGreaterEqual(logging.getLogger("httpx").level, logging.WARNING)
 
     @patch("bot.tashkent_now")
     def test_format_magnetic_data_matches_compact_design(self, mock_now):

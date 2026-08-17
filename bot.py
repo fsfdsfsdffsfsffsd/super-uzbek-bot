@@ -61,16 +61,49 @@ if not BOT_TOKEN:
 if ADMIN_CHAT_ID:
     ADMIN_CHAT_ID = int(ADMIN_CHAT_ID)
 
-# Logging sozlamalari
+# Loglarga token va API kalitlari tushib qolmasligi uchun
+def redact_sensitive_text(value: Any) -> str:
+    text = str(value)
+    for secret in (BOT_TOKEN, IQAIR_API_KEY):
+        if secret:
+            text = text.replace(secret, "[REDACTED]")
+
+    text = re.sub(
+        r"(api\.telegram\.org/bot)[^/\s\"']+",
+        r"\1[REDACTED]",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"([?&](?:key|token|api_key|access_token)=)[^&\s\"']+",
+        r"\1[REDACTED]",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return text
+
+
+class SensitiveDataFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = redact_sensitive_text(record.getMessage())
+        record.args = ()
+        return True
+
+
+# Faqat konsol/Render logi: lokal faylga yozilmaydi.
+console_handler = logging.StreamHandler()
+console_handler.addFilter(SensitiveDataFilter())
+
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
-    handlers=[
-        logging.FileHandler("super_uzbek_bot.log", encoding='utf-8'),
-        logging.StreamHandler()
-    ]
+    handlers=[console_handler],
 )
 logger = logging.getLogger(__name__)
+
+# httpx INFO loglari Telegram bot tokenini URL ichida chiqaradi.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 # Cache tizimi (OPTIMALLASHTIRILDI: 1000 foydalanuvchi uchun)
