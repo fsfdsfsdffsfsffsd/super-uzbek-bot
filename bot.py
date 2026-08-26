@@ -178,10 +178,20 @@ class SuperUzbekBot:
         self.bank_url = "https://bank.uz/uz/currency"
         self.weather_url = "https://yandex.uz/pogoda/ru/tashkent?lat=41.330278&lon=69.337088"
         self.forecast_url = "https://yandex.uz/pogoda/ru/tashkent?lat=41.311151&lon=69.279737"
-        # Gismeteo'ning eski /gm/ sahifasidagi jadval endi bo'sh keladi.
-        # K-indekslar asosiy prognoz sahifalaridagi geomagnetic qatorida bor.
-        self.magnetic_url = "https://www.gismeteo.ru/weather-tashkent-5331/"
-        self.magnetic_forecast_url = "https://www.gismeteo.ru/weather-tashkent-5331/3-days/"
+        # Gismeteo .ru sahifasi ba'zan geomagnit qatorini bo'sh qaytaradi.
+        # .kz va .by Gismeteo rasmiy mirrorlari ayni ma'lumotni to'liq beradi.
+        self.magnetic_urls = [
+            "https://www.gismeteo.kz/weather-tashkent-5331/",
+            "https://www.gismeteo.by/weather-tashkent-5331/",
+            "https://www.gismeteo.ru/weather-tashkent-5331/",
+        ]
+        self.magnetic_forecast_urls = [
+            "https://www.gismeteo.kz/weather-tashkent-5331/3-days/",
+            "https://www.gismeteo.by/weather-tashkent-5331/3-days/",
+            "https://www.gismeteo.ru/weather-tashkent-5331/3-days/",
+        ]
+        self.magnetic_url = self.magnetic_urls[0]
+        self.magnetic_forecast_url = self.magnetic_forecast_urls[0]
         self.cached_currency = None
         self.cached_weather = None
         self.cached_prayer = None
@@ -978,39 +988,50 @@ class SuperUzbekBot:
         if cached_data: return cached_data
 
         try:
-            html = await self.fetch_with_retry(self.magnetic_url)
-            if not html: return None
-            soup = BeautifulSoup(html, 'html.parser')
+            for url in self.magnetic_urls:
+                html = await self.fetch_with_retry(url)
+                if not html:
+                    continue
 
-            time_nodes = soup.select('.widget-row-datetime-time time-value[timestamp]')
-            value_nodes = soup.select('.widget-row-geomagnetic .row-item .item')
-            if not time_nodes or len(time_nodes) != len(value_nodes):
-                logger.error(
-                    "Gismeteo magnit qatori topilmadi yoki ustunlar soni mos emas: "
-                    f"vaqt={len(time_nodes)}, qiymat={len(value_nodes)}"
+                soup = BeautifulSoup(html, 'html.parser')
+                time_nodes = soup.select('.widget-row-datetime-time time-value[timestamp]')
+                value_nodes = soup.select('.widget-row-geomagnetic .row-item .item')
+                if not time_nodes or len(time_nodes) != len(value_nodes):
+                    logger.warning(
+                        "Gismeteo magnit qatori mirror sahifasida to'liq emas: "
+                        f"vaqt={len(time_nodes)}, qiymat={len(value_nodes)}, url={url}"
+                    )
+                    continue
+
+                hourly_data = []
+                invalid_row = False
+                for time_node, value_node in zip(time_nodes[:8], value_nodes[:8]):
+                    timestamp = time_node.get('timestamp', '')
+                    index = value_node.get_text(strip=True)
+                    if not timestamp.isdigit() or not re.fullmatch(r'[0-9]', index):
+                        invalid_row = True
+                        break
+
+                    local_time = datetime.fromtimestamp(int(timestamp), TASHKENT_TZ)
+                    hourly_data.append({
+                        "time": local_time.strftime('%H:%M'),
+                        "index": index,
+                    })
+
+                if invalid_row or not hourly_data:
+                    logger.warning(f"Gismeteo magnit qatorida noto'g'ri qiymat: {url}")
+                    continue
+
+                result = MagneticData(
+                    date="Bugun",
+                    hourly_data=hourly_data,
+                    timestamp=tashkent_now().strftime('%d.%m.%Y %H:%M'),
                 )
-                return None
+                self._set_cached_data(cache_key, result)
+                return result
 
-            hourly_data = []
-            for time_node, value_node in zip(time_nodes[:8], value_nodes[:8]):
-                timestamp = time_node.get('timestamp', '')
-                index = value_node.get_text(strip=True)
-                if not timestamp.isdigit() or not re.fullmatch(r'[0-9]', index):
-                    logger.error("Gismeteo magnit qatorida noto'g'ri qiymat topildi")
-                    return None
-
-                local_time = datetime.fromtimestamp(int(timestamp), TASHKENT_TZ)
-                hourly_data.append({
-                    "time": local_time.strftime('%H:%M'),
-                    "index": index,
-                })
-
-            if not hourly_data:
-                return None
-
-            result = MagneticData(date="Bugun", hourly_data=hourly_data, timestamp=tashkent_now().strftime('%d.%m.%Y %H:%M'))
-            self._set_cached_data(cache_key, result)
-            return result
+            logger.error("Barcha Gismeteo mirrorlarida magnit qatori topilmadi")
+            return None
         except Exception as e:
             logger.error(f"Magnit xato: {str(e)}")
             return None
@@ -1018,52 +1039,61 @@ class SuperUzbekBot:
     async def fetch_3day_magnetic_forecast(self) -> str:
         """3 kunlik magnit bo'roni prognozi (YANGILANGAN DIZAYN)"""
         try:
-            html = await self.fetch_with_retry(self.magnetic_forecast_url)
-            if not html: return "❌ Ma'lumot olishda xatolik."
-
-            soup = BeautifulSoup(html, 'html.parser')
-
-            time_nodes = soup.select('.widget-row-datetime-time time-value[timestamp]')
-            value_nodes = soup.select('.widget-row-geomagnetic .row-item .item')
-            daily_indexes = {}
             today = tashkent_now().date()
+            daily_indexes = None
 
-            if time_nodes and len(time_nodes) == len(value_nodes):
-                for time_node, value_node in zip(time_nodes, value_nodes):
-                    timestamp = time_node.get('timestamp', '')
-                    index = value_node.get_text(strip=True)
-                    if not timestamp.isdigit() or not re.fullmatch(r'[0-9]', index):
-                        continue
+            for url in self.magnetic_forecast_urls:
+                html = await self.fetch_with_retry(url)
+                if not html:
+                    continue
 
-                    local_date = datetime.fromtimestamp(int(timestamp), TASHKENT_TZ).date()
-                    daily_indexes.setdefault(local_date, []).append(int(index))
-            else:
-                # Gismeteo ko'p kunlik sahifada timestamp o'rniga har bir kun
-                # uchun "tun/ertalab/kunduz/kechqurun" kabi 4 ta ustun beradi.
-                date_nodes = soup.select('.widget-row-tod-date .row-item')
-                if (
-                    not value_nodes
-                    or not date_nodes
-                    or len(value_nodes) % len(date_nodes) != 0
-                ):
-                    logger.error(
-                        "Gismeteo 3 kunlik magnit qatori topilmadi yoki ustunlar soni mos emas: "
-                        f"sana={len(date_nodes)}, vaqt={len(time_nodes)}, "
-                        f"qiymat={len(value_nodes)}"
-                    )
-                    return "❌ Ma'lumot topilmadi."
+                soup = BeautifulSoup(html, 'html.parser')
+                time_nodes = soup.select('.widget-row-datetime-time time-value[timestamp]')
+                value_nodes = soup.select('.widget-row-geomagnetic .row-item .item')
+                candidate_indexes = {}
 
-                periods_per_day = len(value_nodes) // len(date_nodes)
-                for day_offset in range(len(date_nodes)):
-                    start = day_offset * periods_per_day
-                    end = start + periods_per_day
-                    indexes = [
-                        int(node.get_text(strip=True))
-                        for node in value_nodes[start:end]
-                        if re.fullmatch(r'[0-9]', node.get_text(strip=True))
-                    ]
-                    if indexes:
-                        daily_indexes[today + timedelta(days=day_offset)] = indexes
+                if time_nodes and len(time_nodes) == len(value_nodes):
+                    for time_node, value_node in zip(time_nodes, value_nodes):
+                        timestamp = time_node.get('timestamp', '')
+                        index = value_node.get_text(strip=True)
+                        if not timestamp.isdigit() or not re.fullmatch(r'[0-9]', index):
+                            continue
+
+                        local_date = datetime.fromtimestamp(int(timestamp), TASHKENT_TZ).date()
+                        candidate_indexes.setdefault(local_date, []).append(int(index))
+                else:
+                    # Ko'p kunlik sahifada har bir kun uchun 4 ta davr beriladi.
+                    date_nodes = soup.select('.widget-row-tod-date .row-item')
+                    if (
+                        value_nodes
+                        and date_nodes
+                        and len(value_nodes) % len(date_nodes) == 0
+                    ):
+                        periods_per_day = len(value_nodes) // len(date_nodes)
+                        for day_offset in range(len(date_nodes)):
+                            start = day_offset * periods_per_day
+                            end = start + periods_per_day
+                            indexes = [
+                                int(node.get_text(strip=True))
+                                for node in value_nodes[start:end]
+                                if re.fullmatch(r'[0-9]', node.get_text(strip=True))
+                            ]
+                            if indexes:
+                                candidate_indexes[today + timedelta(days=day_offset)] = indexes
+
+                if candidate_indexes:
+                    daily_indexes = candidate_indexes
+                    break
+
+                logger.warning(
+                    "Gismeteo 3 kunlik magnit qatori mirror sahifasida to'liq emas: "
+                    f"sana={len(soup.select('.widget-row-tod-date .row-item'))}, "
+                    f"vaqt={len(time_nodes)}, qiymat={len(value_nodes)}, url={url}"
+                )
+
+            if not daily_indexes:
+                logger.error("Barcha Gismeteo mirrorlarida 3 kunlik magnit qatori topilmadi")
+                return "❌ Ma'lumot topilmadi."
 
             forecast_dates = [day for day in sorted(daily_indexes) if day >= today][:3]
             if not forecast_dates:
