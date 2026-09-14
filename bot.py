@@ -1375,8 +1375,7 @@ def get_main_keyboard():
     keyboard = [
         [KeyboardButton("🕌 Namoz vaqti"), KeyboardButton("💵 Valyuta kursi")],
         [KeyboardButton("🌤 Ob-havo"), KeyboardButton("😷 Havo tozaligi")],
-        [KeyboardButton("🧲 Magnit bo'roni")],
-        [KeyboardButton("⚙️ Avtomatik xabarlar")],
+        [KeyboardButton("🧲 Magnit bo'roni"), KeyboardButton("⚙️ Avtomatik xabarlar")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 

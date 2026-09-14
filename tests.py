@@ -453,6 +453,10 @@ class TestAutomaticNotificationSettings(unittest.TestCase):
         button_texts = [button.text for row in markup.keyboard for button in row]
 
         self.assertIn("⚙️ Avtomatik xabarlar", button_texts)
+        self.assertEqual(
+            [button.text for button in markup.keyboard[-1]],
+            ["🧲 Magnit bo'roni", "⚙️ Avtomatik xabarlar"],
+        )
 
     def test_setting_is_persisted_and_reloaded(self):
         store = self.make_store()
