@@ -60,7 +60,24 @@ keep-alive) shart emas.
 > kechikadi (servis uyg'onayotgani uchun). Keyingi xabarlar tez ishlaydi.
 
 `.github/workflows/keep-alive.yml` workflow'i ixtiyoriy — u vaqti-vaqti bilan
-ping yuborib sovuq startlarni kamaytiradi, lekin bot uchun shart emas.
+ping yuborib servisni uyg'oq tutadi. Avtomatik kundalik xabarlar belgilangan
+vaqtga yaqin yuborilishi uchun bu workflow yoqilgan bo'lishi kerak.
+
+## Avtomatik xabar sozlamalarini saqlash
+
+Bot foydalanuvchi tanlagan vaqtlarni `notification_settings.json` faylida
+saqlaydi. Lokal kompyuterda bu fayl qayta ishga tushirishdan keyin ham qoladi.
+
+Render Free servisida lokal fayllar doimiy emas: yangi deploy yoki instans
+almashtirilganda sozlamalar yo'qolishi mumkin. Doimiy Render disk ulangan bo'lsa,
+quyidagi environment variable'ni disk ichidagi manzilga sozlang:
+
+```text
+NOTIFICATION_SETTINGS_FILE=/var/data/notification_settings.json
+```
+
+Doimiy disksiz rejim ishlaydi, lekin deploydan keyin foydalanuvchilar avtomatik
+xabar vaqtlarini qayta tanlashlari mumkin.
 
 ---
 

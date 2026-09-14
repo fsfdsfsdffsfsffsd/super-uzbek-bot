@@ -8,6 +8,8 @@ __pycache__/
 
 # Loglar
 *.log
+notification_settings.json
+notification_settings.json.tmp
 
 # Virtual environment
 venv/

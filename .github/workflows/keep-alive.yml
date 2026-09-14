@@ -1,34 +1,30 @@
 name: Keep Render bot awake
 
-# Render bepul tarifi 15 daqiqa harakatsizlikdan keyin botni uxlatadi.
-# Bu workflow bot manziliga ping yuborib, userbot sync ishlayotganini tekshiradi.
-
 on:
   schedule:
-    - cron: "*/5 * * * *"
-  workflow_dispatch:        # Qo'lda ham ishga tushirish mumkin
+    # Soat boshidagi GitHub navbatini chetlab, servisni har 5 daqiqada uyg'oq tutadi.
+    - cron: "2-57/5 * * * *"
+  workflow_dispatch:
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Ping bot
+      - name: Wake Super Uzbek bot
         env:
-          AVTOELON_SYNC_TOKEN: ${{ secrets.AVTOELON_SYNC_TOKEN }}
+          BOT_URL: https://super-uzbek-bot.onrender.com/
         run: |
-          echo "Ping yuborilmoqda: $(date -u)"
-          # Eski oddiy bot servisi mavjud bo'lsa uyg'otib qo'yamiz, lekin Avtoelon
-          # userbot sog'lig'i quyidagi /sync chaqiruvi bilan tekshiriladi.
-          curl -sS -m 60 https://super-uzbek-bot.onrender.com/ || true
-          curl -sS -m 60 https://super-uzbek-bot-1.onrender.com/ || true
-
-          if [ -z "$AVTOELON_SYNC_TOKEN" ]; then
-            echo "AVTOELON_SYNC_TOKEN secret topilmadi; /sync tekshiruvi bajarilmadi."
-            exit 1
-          fi
-
-          curl --fail --show-error --silent --max-time 240 \
-            "https://super-uzbek-bot-1.onrender.com/sync?token=${AVTOELON_SYNC_TOKEN}"
-          echo ""
-          echo "Tayyor."
+          for attempt in 1 2 3; do
+            status="$(curl --silent --show-error --output /dev/null \
+              --write-out "%{http_code}" --max-time 180 "$BOT_URL" || true)"
+            case "$status" in
+              2??|3??|4??)
+                echo "Bot uyg'oq (HTTP $status)."
+                exit 0
+                ;;
+            esac
+            echo "Urinish $attempt muvaffaqiyatsiz (HTTP $status)."
+            sleep 10
+          done
+          exit 1

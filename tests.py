@@ -1,9 +1,13 @@
 import unittest
 import logging
+import tempfile
+from dataclasses import FrozenInstanceError
+from pathlib import Path
 from unittest.mock import MagicMock, patch, AsyncMock
+import bot as bot_module
 from bot import SuperUzbekBot, PrayerData, PrayerTime, CurrencyData, AirQualityData, WeatherData, MagneticData, cache, tashkent_now, AIR_QUALITY_CACHE_TIME, prayer_cache_seconds_until_refresh, redact_sensitive_text
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 
 class TestSuperUzbekBot(unittest.TestCase):
     def setUp(self):
@@ -431,6 +435,265 @@ class TestSuperUzbekBot(unittest.TestCase):
 
         self.assertIn("☀️ Ochiq", result)
         self.assertNotIn("☁️ Ochiq", result)
+
+
+class TestAutomaticNotificationSettings(unittest.TestCase):
+    """Per-user daily notification configuration and persistence contract."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.settings_path = Path(self.temp_dir.name) / "notification-settings.json"
+
+    def make_store(self):
+        return bot_module.NotificationSettingsStore(self.settings_path)
+
+    def test_main_keyboard_contains_automatic_notification_settings_button(self):
+        markup = bot_module.get_main_keyboard()
+        button_texts = [button.text for row in markup.keyboard for button in row]
+
+        self.assertIn("⚙️ Avtomatik xabarlar", button_texts)
+
+    def test_setting_is_persisted_and_reloaded(self):
+        store = self.make_store()
+        saved = store.upsert(
+            user_id=101,
+            chat_id=202,
+            kind="prayer",
+            time_str="07:00",
+            enabled=True,
+        )
+
+        reloaded = self.make_store().get(user_id=101, kind="prayer")
+
+        self.assertEqual(saved, reloaded)
+        self.assertEqual(reloaded.user_id, 101)
+        self.assertEqual(reloaded.chat_id, 202)
+        self.assertEqual(reloaded.kind, "prayer")
+        self.assertEqual(reloaded.time_str, "07:00")
+        self.assertTrue(reloaded.enabled)
+        self.assertIsNone(reloaded.last_sent_date)
+
+    def test_setting_value_object_is_immutable(self):
+        setting = self.make_store().upsert(
+            user_id=101,
+            chat_id=202,
+            kind="weather",
+            time_str="08:00",
+        )
+
+        with self.assertRaises(FrozenInstanceError):
+            setting.time_str = "09:00"
+
+    def test_upsert_rejects_invalid_boundary_values(self):
+        store = self.make_store()
+
+        invalid_values = [
+            {"user_id": True, "chat_id": 202, "kind": "prayer", "time_str": "07:00"},
+            {"user_id": 0, "chat_id": 202, "kind": "prayer", "time_str": "07:00"},
+            {"user_id": 101, "chat_id": False, "kind": "prayer", "time_str": "07:00"},
+            {"user_id": 101, "chat_id": 0, "kind": "prayer", "time_str": "07:00"},
+            {"user_id": 101, "chat_id": 202, "kind": "news", "time_str": "07:00"},
+            {"user_id": 101, "chat_id": 202, "kind": "prayer", "time_str": "7:00"},
+            {"user_id": 101, "chat_id": 202, "kind": "prayer", "time_str": "24:00"},
+            {"user_id": 101, "chat_id": 202, "kind": "prayer", "time_str": "07:60"},
+        ]
+
+        for values in invalid_values:
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                store.upsert(**values)
+
+    def test_get_rejects_invalid_boundary_values(self):
+        store = self.make_store()
+
+        invalid_values = [
+            (True, "prayer"),
+            (0, "prayer"),
+            (101, "news"),
+        ]
+        for user_id, kind in invalid_values:
+            with self.subTest(user_id=user_id, kind=kind), self.assertRaises(ValueError):
+                store.get(user_id, kind)
+
+    def test_callback_parser_accepts_only_supported_actions_and_values(self):
+        supported_kinds = ("prayer", "weather", "currency", "air", "magnetic")
+        for index, kind in enumerate(supported_kinds, start=7):
+            time_str = f"{index:02d}:00"
+            with self.subTest(kind=kind):
+                self.assertEqual(
+                    bot_module.parse_notification_callback(
+                        f"notify:set:{kind}:{time_str}"
+                    ),
+                    {"action": "set", "kind": kind, "time": time_str},
+                )
+
+        self.assertEqual(
+            bot_module.parse_notification_callback("notify:toggle:weather:off"),
+            {"action": "toggle", "kind": "weather", "enabled": False},
+        )
+        self.assertEqual(
+            bot_module.parse_notification_callback("notify:toggle:prayer:on"),
+            {"action": "toggle", "kind": "prayer", "enabled": True},
+        )
+
+        invalid_callbacks = [
+            "weather:set:prayer:07:00",
+            "notify:delete:prayer:07:00",
+            "notify:set:news:07:00",
+            "notify:set:prayer:7:00",
+            "notify:set:prayer:24:00",
+            "notify:toggle:prayer:yes",
+            "notify:set:prayer:07:00:ignored",
+        ]
+        for callback_data in invalid_callbacks:
+            with self.subTest(callback_data=callback_data), self.assertRaises(ValueError):
+                bot_module.parse_notification_callback(callback_data)
+
+    def test_disable_and_enable_are_persistent_and_preserve_time(self):
+        store = self.make_store()
+        store.upsert(101, 202, "prayer", "07:00", enabled=True)
+
+        disabled = store.set_enabled(101, "prayer", False)
+        disabled_after_restart = self.make_store().get(101, "prayer")
+
+        self.assertFalse(disabled.enabled)
+        self.assertEqual(disabled.time_str, "07:00")
+        self.assertFalse(disabled_after_restart.enabled)
+
+        enabled = self.make_store().set_enabled(101, "prayer", True)
+        self.assertTrue(enabled.enabled)
+        self.assertEqual(enabled.time_str, "07:00")
+
+    def test_due_matching_uses_asia_tashkent_with_restart_grace_window(self):
+        store = self.make_store()
+        store.upsert(101, 202, "prayer", "07:00")
+        store.upsert(101, 202, "weather", "08:00")
+
+        # 02:00 UTC is 07:00 in Asia/Tashkent.
+        due = store.due_at(datetime(2026, 9, 14, 2, 0, 45, tzinfo=timezone.utc))
+        shortly_after = store.due_at(datetime(2026, 9, 14, 2, 1, tzinfo=timezone.utc))
+        too_late = store.due_at(datetime(2026, 9, 14, 2, 15, tzinfo=timezone.utc))
+
+        self.assertEqual([(item.user_id, item.kind) for item in due], [(101, "prayer")])
+        self.assertEqual(
+            [(item.user_id, item.kind) for item in shortly_after],
+            [(101, "prayer")],
+        )
+        self.assertEqual(too_late, [])
+
+    def test_due_matching_rejects_naive_datetime(self):
+        store = self.make_store()
+        store.upsert(101, 202, "prayer", "07:00")
+
+        with self.assertRaises(ValueError):
+            store.due_at(datetime(2026, 9, 14, 7, 0))
+
+    def test_disabled_setting_is_not_due(self):
+        store = self.make_store()
+        store.upsert(101, 202, "prayer", "07:00", enabled=False)
+
+        due = store.due_at(datetime(2026, 9, 14, 2, 0, tzinfo=timezone.utc))
+
+        self.assertEqual(due, [])
+
+    def test_mark_sent_prevents_duplicate_only_for_same_local_day(self):
+        store = self.make_store()
+        store.upsert(101, 202, "prayer", "07:00")
+        first_day = datetime(2026, 9, 14, 2, 0, tzinfo=timezone.utc)
+
+        store.mark_sent(101, "prayer", first_day)
+
+        self.assertEqual(store.due_at(first_day), [])
+        next_day = datetime(2026, 9, 15, 2, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            [(item.user_id, item.kind) for item in store.due_at(next_day)],
+            [(101, "prayer")],
+        )
+
+
+class TestAutomaticNotificationDispatch(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.store = bot_module.NotificationSettingsStore(
+            Path(self.temp_dir.name) / "notification-settings.json"
+        )
+        self.provider = MagicMock()
+        self.provider.build_prayer_notification = AsyncMock(return_value="prayer text")
+        self.provider.build_weather_notification = AsyncMock(return_value="weather text")
+        self.provider.build_currency_notification = AsyncMock(return_value="currency text")
+        self.provider.build_air_notification = AsyncMock(return_value="air text")
+        self.provider.build_magnetic_notification = AsyncMock(return_value="magnetic text")
+        self.sender = MagicMock()
+        self.sender.send_message = AsyncMock()
+        self.service = bot_module.AutomaticNotificationService(self.store, self.provider)
+
+    async def test_dispatch_uses_all_existing_content_interfaces(self):
+        schedules = (
+            (101, 201, "prayer", "prayer text"),
+            (102, 202, "weather", "weather text"),
+            (103, 203, "currency", "currency text"),
+            (104, 204, "air", "air text"),
+            (105, 205, "magnetic", "magnetic text"),
+        )
+        for user_id, chat_id, kind, _ in schedules:
+            self.store.upsert(user_id, chat_id, kind, "07:00")
+        now = datetime(2026, 9, 14, 2, 0, tzinfo=timezone.utc)
+
+        sent_count = await self.service.dispatch_due(self.sender, now)
+
+        self.assertEqual(sent_count, 5)
+        self.provider.build_prayer_notification.assert_awaited_once_with()
+        self.provider.build_weather_notification.assert_awaited_once_with()
+        self.provider.build_currency_notification.assert_awaited_once_with()
+        self.provider.build_air_notification.assert_awaited_once_with()
+        self.provider.build_magnetic_notification.assert_awaited_once_with()
+        for _, chat_id, _, text in schedules:
+            self.sender.send_message.assert_any_await(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=bot_module.ParseMode.MARKDOWN,
+            )
+
+    async def test_dispatch_does_not_send_twice_on_same_day(self):
+        self.store.upsert(101, 201, "prayer", "07:00")
+        now = datetime(2026, 9, 14, 2, 0, tzinfo=timezone.utc)
+
+        first_count = await self.service.dispatch_due(self.sender, now)
+        second_count = await self.service.dispatch_due(self.sender, now)
+
+        self.assertEqual(first_count, 1)
+        self.assertEqual(second_count, 0)
+        self.sender.send_message.assert_awaited_once()
+
+    async def test_failed_send_is_not_marked_and_can_be_retried(self):
+        self.store.upsert(101, 201, "weather", "08:00")
+        now = datetime(2026, 9, 14, 3, 0, tzinfo=timezone.utc)
+        self.sender.send_message.side_effect = RuntimeError("Telegram unavailable")
+
+        sent_count = await self.service.dispatch_due(self.sender, now)
+
+        self.assertEqual(sent_count, 0)
+        self.assertEqual(
+            [(item.user_id, item.kind) for item in self.store.due_at(now)],
+            [(101, "weather")],
+        )
+
+    async def test_failed_data_fetch_message_is_not_sent_or_marked(self):
+        self.store.upsert(101, 201, "weather", "08:00")
+        now = datetime(2026, 9, 14, 3, 0, tzinfo=timezone.utc)
+        self.provider.build_weather_notification.return_value = (
+            "⚠️ Ob-havo ma'lumotini hozir olishning iloji bo'lmadi."
+        )
+
+        sent_count = await self.service.dispatch_due(self.sender, now)
+
+        self.assertEqual(sent_count, 0)
+        self.sender.send_message.assert_not_awaited()
+        self.assertEqual(
+            [(item.user_id, item.kind) for item in self.store.due_at(now)],
+            [(101, "weather")],
+        )
 
 if __name__ == '__main__':
     unittest.main()

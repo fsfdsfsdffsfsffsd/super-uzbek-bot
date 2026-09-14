@@ -15,11 +15,19 @@ from dotenv import load_dotenv
 
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
-from telegram.constants import ParseMode
+from telegram.constants import ChatType, ParseMode
 from typing import List, Dict, Optional, Any
 import time
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
+
+from notifications import (
+    AutomaticNotificationService,
+    NotificationSettingsStore,
+    SUPPORTED_NOTIFICATION_KINDS,
+    parse_notification_callback,
+)
 
 # Windows konsolida emoji (✅, 🕌 ...) chiqarishda UnicodeEncodeError bo'lmasligi uchun
 # stdout/stderr ni UTF-8 ga o'tkazamiz
@@ -51,6 +59,9 @@ def prayer_cache_seconds_until_refresh(now: Optional[datetime] = None) -> int:
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 IQAIR_API_KEY = os.getenv("IQAIR_API_KEY")
+NOTIFICATION_SETTINGS_FILE = Path(
+    os.getenv("NOTIFICATION_SETTINGS_FILE", "notification_settings.json")
+)
 
 # Token borligini tekshirish (muhim!)
 if not BOT_TOKEN:
@@ -213,6 +224,7 @@ class SuperUzbekBot:
         self.session = None
         self.background_task = None  # Fon yangilash vazifasi (toza to'xtatish uchun)
         self.prayer_background_task = None
+        self.notification_background_task = None
 
     async def start_background_tasks(self):
         """Ma'lumotlarni har 5 daqiqada yangilash (1000 foydalanuvchi uchun optimallashtirildi)"""
@@ -1176,6 +1188,78 @@ class SuperUzbekBot:
         )
         return result
 
+    # ========== AVTOMATIK XABAR MATNLARI ==========
+
+    async def build_prayer_notification(self) -> str:
+        data = await self.get_prayer_times()
+        if data:
+            self.cached_prayer = data
+            return self.format_prayer_times(data)
+        return "⚠️ Namoz vaqtlarini hozir olishning iloji bo'lmadi."
+
+    async def build_currency_notification(self) -> str:
+        data = self.cached_currency or await self.get_currency_rates()
+        if data:
+            self.cached_currency = data
+            return self.format_currency_rates(data)
+        return "⚠️ Valyuta kurslarini hozir olishning iloji bo'lmadi."
+
+    def _weather_message_from_data(self, data: WeatherData) -> str:
+        temperatures: Dict[str, str] = {}
+        emojis: Dict[str, str] = {}
+        for period in ("m", "d", "e", "n"):
+            condition = data.periods.get(period, {}).get("condition", "N/A")
+            translated = self.translate_weather_condition(condition)
+            emojis[period] = self.get_weather_emoji(translated)
+
+            raw_temperature = data.periods.get(period, {}).get("temp", "N/A")
+            clean_temperature = raw_temperature.replace("°", "").replace("C", "").strip()
+            match = re.match(r"([+-]?\d+)", clean_temperature)
+            temperatures[period] = f"{match.group(1)}°" if match else raw_temperature
+
+        return self.format_weather_data_md(
+            {
+                "date": self.get_formatted_date(),
+                "location": SETTINGS["default_city"],
+                "morning_emoji": emojis["m"],
+                "morning_temp": temperatures["m"],
+                "day_emoji": emojis["d"],
+                "day_temp": temperatures["d"],
+                "evening_emoji": emojis["e"],
+                "evening_temp": temperatures["e"],
+                "night_emoji": emojis["n"],
+                "night_temp": temperatures["n"],
+            }
+        )
+
+    async def build_weather_notification(self) -> str:
+        data = self.cached_weather or await self.fetch_weather_data()
+        if data:
+            self.cached_weather = data
+            return self._weather_message_from_data(data)
+        return "⚠️ Ob-havo ma'lumotini hozir olishning iloji bo'lmadi."
+
+    async def build_air_notification(self) -> str:
+        data = await self.fetch_air_quality()
+        if data:
+            self.cached_air = data
+            return self.format_air_quality_md(
+                {
+                    "date": self.get_formatted_date(),
+                    "location": "Toshkent shahri",
+                    "aqi": data.aqi,
+                    "advice": self.get_recommendations(data.aqi),
+                }
+            )
+        return "⚠️ Havo sifati ma'lumotini hozir olishning iloji bo'lmadi."
+
+    async def build_magnetic_notification(self) -> str:
+        data = self.cached_magnetic or await self.fetch_magnetic_storms()
+        if data:
+            self.cached_magnetic = data
+            return self.format_magnetic_data(data)
+        return "⚠️ Magnit bo'roni ma'lumotini hozir olishning iloji bo'lmadi."
+
     # ========== CACHE ==========
 
     def _get_cached_data(self, key: str) -> Any:
@@ -1189,6 +1273,100 @@ class SuperUzbekBot:
         cache[key] = {'data': data, 'time': time.time(), 'expiry': expiry or CACHE_TIME}
 
 bot = SuperUzbekBot()
+notification_store = NotificationSettingsStore(NOTIFICATION_SETTINGS_FILE)
+notification_service = AutomaticNotificationService(notification_store, bot)
+
+NOTIFICATION_KIND_DETAILS = (
+    ("prayer", "🕌", "Namoz vaqtlari", "07:00"),
+    ("weather", "🌤", "Ob-havo", "08:00"),
+    ("currency", "💵", "Valyuta kursi", "09:00"),
+    ("air", "😷", "Havo tozaligi", "10:00"),
+    ("magnetic", "🧲", "Magnit bo'roni", "11:00"),
+)
+
+
+def get_notification_kind_detail(kind: str) -> tuple[str, str, str]:
+    for item_kind, emoji, label, default_time in NOTIFICATION_KIND_DETAILS:
+        if item_kind == kind:
+            return emoji, label, default_time
+    raise ValueError("Noma'lum avtomatik xabar turi")
+
+
+def get_notification_menu_text() -> str:
+    return (
+        "⚙️ *Avtomatik xabarlar*\n\n"
+        "Har kuni avtomatik keladigan ma'lumotni tanlang. "
+        "Keyin yuborilish vaqtini bosing.\n\n"
+        "🕐 Vaqt mintaqasi: Toshkent"
+    )
+
+
+def get_notification_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    rows = []
+    for kind, emoji, label, _ in NOTIFICATION_KIND_DETAILS:
+        setting = notification_store.get(user_id, kind)
+        if setting and setting.enabled:
+            status = f"{setting.time_str} ✅"
+        elif setting:
+            status = f"{setting.time_str} · o'chiq"
+        else:
+            status = "sozlanmagan"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"{emoji} {label} · {status}",
+                    callback_data=f"notify:select:{kind}",
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(rows)
+
+
+def get_notification_time_keyboard(
+    user_id: int,
+    kind: str,
+) -> InlineKeyboardMarkup:
+    if kind not in SUPPORTED_NOTIFICATION_KINDS:
+        raise ValueError("Noma'lum avtomatik xabar turi")
+    setting = notification_store.get(user_id, kind)
+    rows = []
+    hour_buttons = []
+    for hour in range(24):
+        time_str = f"{hour:02d}:00"
+        selected = bool(setting and setting.enabled and setting.time_str == time_str)
+        hour_buttons.append(
+            InlineKeyboardButton(
+                f"{'✅ ' if selected else ''}{time_str}",
+                callback_data=f"notify:set:{kind}:{time_str}",
+            )
+        )
+        if len(hour_buttons) == 4:
+            rows.append(hour_buttons)
+            hour_buttons = []
+
+    if setting and setting.enabled:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "🔕 O'chirish",
+                    callback_data=f"notify:toggle:{kind}:off",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton("⬅️ Orqaga", callback_data="notify:menu")])
+    return InlineKeyboardMarkup(rows)
+
+
+def get_notification_kind_text(user_id: int, kind: str) -> str:
+    emoji, label, _ = get_notification_kind_detail(kind)
+    setting = notification_store.get(user_id, kind)
+    if setting and setting.enabled:
+        current = f"✅ Yoqilgan: har kuni {setting.time_str} da"
+    elif setting:
+        current = f"🔕 O'chirilgan (oxirgi vaqt: {setting.time_str})"
+    else:
+        current = "Hali sozlanmagan"
+    return f"{emoji} *{label}*\n\n{current}\n\nKerakli vaqtni tanlang:"
 
 # ========== KLAVIATURA (KEYBOARD) ==========
 
@@ -1197,7 +1375,8 @@ def get_main_keyboard():
     keyboard = [
         [KeyboardButton("🕌 Namoz vaqti"), KeyboardButton("💵 Valyuta kursi")],
         [KeyboardButton("🌤 Ob-havo"), KeyboardButton("😷 Havo tozaligi")],
-        [KeyboardButton("🧲 Magnit bo'roni")]
+        [KeyboardButton("🧲 Magnit bo'roni")],
+        [KeyboardButton("⚙️ Avtomatik xabarlar")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
@@ -1228,8 +1407,87 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard()
     )
 
+
+async def handle_notification_callback(update: Update) -> None:
+    query = update.callback_query
+    if update.effective_chat.type != ChatType.PRIVATE:
+        await query.answer(
+            "Avtomatik xabarlar faqat bot bilan shaxsiy chatda sozlanadi.",
+            show_alert=True,
+        )
+        return
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    data = query.data or ""
+
+    if data == "notify:menu":
+        await query.answer()
+        await query.edit_message_text(
+            get_notification_menu_text(),
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=get_notification_menu_keyboard(user_id),
+        )
+        return
+
+    if data.startswith("notify:select:"):
+        parts = data.split(":")
+        if len(parts) != 3 or parts[2] not in SUPPORTED_NOTIFICATION_KINDS:
+            await query.answer("Noto'g'ri tanlov", show_alert=True)
+            return
+        kind = parts[2]
+        await query.answer()
+        await query.edit_message_text(
+            get_notification_kind_text(user_id, kind),
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=get_notification_time_keyboard(user_id, kind),
+        )
+        return
+
+    try:
+        action = parse_notification_callback(data)
+        kind = action["kind"]
+        _, _, default_time = get_notification_kind_detail(kind)
+        if action["action"] == "set":
+            notification_store.upsert(
+                user_id=user_id,
+                chat_id=chat_id,
+                kind=kind,
+                time_str=action["time"],
+                enabled=True,
+            )
+            confirmation = f"Har kuni {action['time']} ga sozlandi ✅"
+        else:
+            setting = notification_store.get(user_id, kind)
+            if setting is None:
+                notification_store.upsert(
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    kind=kind,
+                    time_str=default_time,
+                    enabled=action["enabled"],
+                )
+            else:
+                notification_store.set_enabled(user_id, kind, action["enabled"])
+            confirmation = "Yoqildi ✅" if action["enabled"] else "O'chirildi 🔕"
+    except (KeyError, OSError, ValueError) as exc:
+        logger.warning("Avtomatik xabar callback xatosi: %s", exc)
+        await query.answer("Sozlamani saqlab bo'lmadi", show_alert=True)
+        return
+
+    await query.answer(confirmation)
+    await query.edit_message_text(
+        get_notification_menu_text(),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=get_notification_menu_keyboard(user_id),
+    )
+
+
 async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    if (query.data or "").startswith("notify:"):
+        await handle_notification_callback(update)
+        return
+
     await query.answer("Ma'lumot yuklanmoqda...") 
     
     if query.data == "weather_3days":
@@ -1284,25 +1542,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⏳ Biroz sekinroq...")
         return
 
-    # 1. Namoz
-    if "Namoz" in text:
-        await send_typing_action(chat_id, context)
-        bot.cached_prayer = await bot.get_prayer_times()
-        if bot.cached_prayer:
-            response = bot.format_prayer_times(bot.cached_prayer)
+    if text == "⚙️ Avtomatik xabarlar":
+        if update.effective_chat.type != ChatType.PRIVATE:
+            await update.message.reply_text(
+                "Avtomatik xabarlarni bot bilan shaxsiy chatda sozlang."
+            )
         else:
-            response = "⚠️ Namoz vaqtlarini hozir olishning iloji bo'lmadi (manba vaqtincha ishlamayapti). Birozdan keyin qayta urinib ko'ring."
+            await update.message.reply_text(
+                get_notification_menu_text(),
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=get_notification_menu_keyboard(user_id),
+            )
+
+    # 1. Namoz
+    elif "Namoz" in text:
+        await send_typing_action(chat_id, context)
+        response = await bot.build_prayer_notification()
         await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
 
     # 2. Valyuta
     elif "Valyuta" in text:
         await send_typing_action(chat_id, context)
-        if not bot.cached_currency:
-            bot.cached_currency = await bot.get_currency_rates()
-        if bot.cached_currency:
-            response = bot.format_currency_rates(bot.cached_currency)
-        else:
-            response = "⚠️ Valyuta kurslarini hozir olishning iloji bo'lmadi. Birozdan keyin qayta urinib ko'ring."
+        response = await bot.build_currency_notification()
         currency_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🏦 Barcha banklarni ko'rish", callback_data="all_banks")]
         ])
@@ -1311,34 +1572,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 3. Ob-havo
     elif "Ob-havo" in text:
         await send_typing_action(chat_id, context)
-        if not bot.cached_weather:  # Cache bo'sh bo'lsa — darhol yuklaymiz
-            bot.cached_weather = await bot.fetch_weather_data()
-        if bot.cached_weather:
-            data = bot.cached_weather
-            formatted_date = bot.get_formatted_date()
-            periods = ['m', 'd', 'e', 'n']
-            temps = {}
-            emojis = {}
-            for p in periods:
-                cond = data.periods.get(p, {}).get('condition', 'N/A')
-                uz_cond = bot.translate_weather_condition(cond)
-                emojis[f"{p}_emoji"] = bot.get_weather_emoji(uz_cond)
-                
-                raw_temp = data.periods.get(p, {}).get('temp', 'N/A')
-                clean = raw_temp.replace('°', '').replace('C', '').strip()
-                match = re.match(r'([+-]?\d+)', clean)
-                temps[f"{p}_temp"] = f"{match.group(1)}°" if match else raw_temp
-
-            w_dict = {
-                'date': formatted_date, 'location': SETTINGS['default_city'],
-                'morning_emoji': emojis['m_emoji'], 'morning_temp': temps['m_temp'],
-                'day_emoji': emojis['d_emoji'], 'day_temp': temps['d_temp'],
-                'evening_emoji': emojis['e_emoji'], 'evening_temp': temps['e_temp'],
-                'night_emoji': emojis['n_emoji'], 'night_temp': temps['n_temp']
-            }
-            response = bot.format_weather_data_md(w_dict)
-        else:
-            response = "⚠️ Ob-havo ma'lumotini hozir olishning iloji bo'lmadi. Birozdan keyin qayta urinib ko'ring."
+        response = await bot.build_weather_notification()
 
         inline_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("📅 3 kunlik ob-havoni ko'rish", callback_data="weather_3days")]
@@ -1348,30 +1582,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 4. Havo tozaligi
     elif "Havo tozaligi" in text:
         await send_typing_action(chat_id, context)
-        bot.cached_air = await bot.fetch_air_quality()
-        if bot.cached_air:
-            data = bot.cached_air
-            rec = bot.get_recommendations(data.aqi)
-            a_dict = {
-                'date': bot.get_formatted_date(),
-                'location': 'Toshkent shahri',
-                'aqi': data.aqi,
-                'advice': rec
-            }
-            response = bot.format_air_quality_md(a_dict)
-        else:
-            response = "⚠️ Havo sifati ma'lumotini hozir olishning iloji bo'lmadi. Birozdan keyin qayta urinib ko'ring."
+        response = await bot.build_air_notification()
         await update.message.reply_text(response, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard())
 
     # 5. Magnit bo'roni
     elif "Magnit" in text:
         await send_typing_action(chat_id, context)
-        if not bot.cached_magnetic:  # Cache bo'sh bo'lsa — darhol yuklaymiz
-            bot.cached_magnetic = await bot.fetch_magnetic_storms()
-        if bot.cached_magnetic:
-            response = bot.format_magnetic_data(bot.cached_magnetic)
-        else:
-            response = "⚠️ Magnit bo'roni ma'lumotini hozir olishning iloji bo'lmadi. Birozdan keyin qayta urinib ko'ring."
+        response = await bot.build_magnetic_notification()
         
         inline_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("📅 3 kunlik holatni ko'rish", callback_data="magnetic_3days")]
@@ -1382,12 +1599,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Iltimos, pastdagi tugmalardan birini tanlang 👇", reply_markup=get_main_keyboard())
 
 
+async def start_notification_background_task(sender: Any) -> None:
+    """Check daily subscriptions frequently enough for the grace window."""
+    while True:
+        try:
+            sent_count = await notification_service.dispatch_due(sender, tashkent_now())
+            if sent_count:
+                logger.info("%s ta avtomatik xabar yuborildi", sent_count)
+        except Exception as exc:
+            logger.error("Avtomatik xabarlar tekshiruvida xatolik: %s", exc)
+
+        await asyncio.sleep(15)
+
+
 async def post_init(application: Application):
     try:
         await bot.create_session()
         # Fon vazifasini saqlaymiz — to'xtaganda toza bekor qilish uchun
         bot.background_task = asyncio.create_task(bot.start_background_tasks())
         bot.prayer_background_task = asyncio.create_task(bot.start_prayer_background_task())
+        bot.notification_background_task = asyncio.create_task(
+            start_notification_background_task(application.bot)
+        )
         logger.info("Bot ishga tushdi va background tasklar boshlandi")
     except Exception as e:
         logger.error(f"Start error: {e}")
@@ -1405,6 +1638,12 @@ async def post_stop(application: Application):
             bot.prayer_background_task.cancel()
             try:
                 await bot.prayer_background_task
+            except asyncio.CancelledError:
+                pass
+        if bot.notification_background_task and not bot.notification_background_task.done():
+            bot.notification_background_task.cancel()
+            try:
+                await bot.notification_background_task
             except asyncio.CancelledError:
                 pass
         await bot.close_session()
