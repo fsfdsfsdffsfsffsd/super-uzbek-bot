@@ -24,8 +24,6 @@ services:
         value: false
       - key: CATCHUP_LIMIT
         value: 500
-      - key: SKIP_REPLIES
-        value: true
       - key: DEST_SCAN_LIMIT
         value: 1500
       - key: CATCHUP_INTERVAL_SECONDS

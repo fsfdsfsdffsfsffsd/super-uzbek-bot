@@ -50,7 +50,6 @@ SYNC_TOKEN=uzun_tasodifiy_maxfiy_matn
 NEW_LINK=https://t.me/AvtoMashinaBozorElonlar
 ALLOW_PUBLIC_SYNC=false
 CATCHUP_LIMIT=500
-SKIP_REPLIES=true
 DEST_SCAN_LIMIT=1500
 CATCHUP_INTERVAL_SECONDS=300
 START_FROM_SOURCE_ID=0
@@ -84,9 +83,9 @@ Agar eski marker/state yo'qolgan bo'lsa yoki bot noto'g'ri yuqori ID saqlab qo'y
 START_FROM_SOURCE_ID=96995
 ```
 
-`SKIP_REPLIES=true` bo'lsa, manba kanalda boshqa postga reply qilib yozilgan xabarlar destination kanalga yuborilmaydi.
+Manba kanalda boshqa postga reply qilib yozilgan xabarlar ham destination kanalga yuboriladi. Destination kanalga yuborilgan postlarga ko'rinmaydigan marker qo'shiladi. Shu marker orqali bot restart/deploydan keyin ham qaysi source post qaysi destination postga ketganini tiklaydi va reply xabarlarni o'sha destination postga reply qilib yuboradi. Bog'langan eski post topilmasa, reply xabar mustaqil post sifatida yuboriladi.
 
-Destination kanalga yuborilgan postlarga ko'rinmaydigan marker qo'shiladi. Shu marker orqali bot restart/deploydan keyin ham qaysi source post qaysi destination postga ketganini tiklaydi va reply xabarlarni o'sha destination postga reply qilib yuboradi.
+Eski versiya `SKIP_REPLIES=true` bilan tashlab ketgan xabarlarni tarixda yuborilgan deb belgilagan. Shu sabab bunday eski xabarlar avtomatik qayta yuborilmaydi; o'zgarishdan keyingi yangi reply postlar yuboriladi.
 
 Qo'lda sync qilish uchun `SYNC_TOKEN` kerak:
 
