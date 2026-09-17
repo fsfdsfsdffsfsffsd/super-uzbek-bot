@@ -11,9 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Wake Super Uzbek bot
+      - name: Wake Avtoelon userbot
         env:
-          BOT_URL: https://super-uzbek-bot.onrender.com/
+          BOT_URL: https://super-uzbek-bot-1.onrender.com/
         run: |
           for attempt in 1 2 3; do
             status="$(curl --silent --show-error --output /dev/null \
