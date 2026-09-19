@@ -26,6 +26,8 @@ services:
         value: 500
       - key: DEST_SCAN_LIMIT
         value: 1500
+      - key: REPLY_SCAN_LIMIT
+        value: 10000
       - key: CATCHUP_INTERVAL_SECONDS
         value: 300
       - key: RECONNECT_DELAY_SECONDS

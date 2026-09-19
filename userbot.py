@@ -60,6 +60,7 @@ HISTORY_FILE = os.environ.get("HISTORY_FILE", "sent_posts_history.txt")
 STATE_FILE = os.environ.get("STATE_FILE", "post_state.json")
 CATCHUP_LIMIT = read_int_env("CATCHUP_LIMIT", 500, min_value=1)
 DEST_SCAN_LIMIT = read_int_env("DEST_SCAN_LIMIT", 1500, min_value=1)
+REPLY_SCAN_LIMIT = read_int_env("REPLY_SCAN_LIMIT", 10000, min_value=1)
 CATCHUP_INTERVAL_SECONDS = read_int_env("CATCHUP_INTERVAL_SECONDS", 300, min_value=1)
 RECONNECT_DELAY_SECONDS = read_int_env("RECONNECT_DELAY_SECONDS", 60, min_value=5)
 SYNC_TIMEOUT_SECONDS = read_int_env("SYNC_TIMEOUT_SECONDS", 180, min_value=30)
@@ -101,6 +102,8 @@ logger = logging.getLogger(__name__)
 
 SOURCE_CHAT_ID: Optional[int] = None
 POST_MAP: dict[str, int] = {}
+REPLY_SCAN_CACHE: dict[str, Optional[int]] = {}
+REPLY_SCAN_COMPLETED = False
 LAST_SOURCE_ID = 0
 PROCESS_LOCK = asyncio.Lock()
 SYNC_LOCK = asyncio.Lock()
@@ -330,11 +333,62 @@ def get_reply_source_id(message) -> Optional[int]:
     return getattr(reply_to, "reply_to_msg_id", None)
 
 
-def get_reply_dest_id(chat_id: int, messages: list) -> Optional[int]:
+async def recover_reply_mappings(client, unique_ids: set[str]) -> None:
+    """Yo'qolgan reply mappinglarini bitta destination scan bilan tiklaydi."""
+    global REPLY_SCAN_COMPLETED
+
+    if REPLY_SCAN_COMPLETED or not unique_ids:
+        for unique_id in unique_ids:
+            REPLY_SCAN_CACHE.setdefault(unique_id, None)
+        return
+
+    scanned = 0
+    async for message in client.iter_messages(DEST_CHANNEL, limit=REPLY_SCAN_LIMIT):
+        scanned += 1
+        for marker_chat_id, source_ids in decode_markers(message.message or ""):
+            for source_id in source_ids:
+                unique_id = build_unique_id(marker_chat_id, source_id)
+                if unique_id in unique_ids and unique_id not in REPLY_SCAN_CACHE:
+                    REPLY_SCAN_CACHE[unique_id] = int(message.id)
+
+    REPLY_SCAN_COMPLETED = True
+    for unique_id in unique_ids:
+        REPLY_SCAN_CACHE.setdefault(unique_id, None)
+        destination_id = REPLY_SCAN_CACHE[unique_id]
+        if destination_id:
+            POST_MAP[unique_id] = destination_id
+            SENT_POSTS.add(unique_id)
+            logger.info(
+                "Reply mapping destination scan orqali topildi: %s -> %s (scanned=%s)",
+                unique_id,
+                destination_id,
+                scanned,
+            )
+    save_state()
+
+
+async def get_reply_dest_id(client, chat_id: int, messages: list) -> Optional[int]:
+    missing_ids: set[str] = set()
     for message in messages:
         reply_source_id = get_reply_source_id(message)
-        if reply_source_id:
-            return POST_MAP.get(build_unique_id(chat_id, reply_source_id))
+        if not reply_source_id:
+            continue
+
+        unique_id = build_unique_id(chat_id, reply_source_id)
+        destination_id = POST_MAP.get(unique_id)
+        if destination_id:
+            return destination_id
+        missing_ids.add(unique_id)
+
+    if missing_ids:
+        await recover_reply_mappings(client, missing_ids)
+        for unique_id in missing_ids:
+            destination_id = POST_MAP.get(unique_id)
+            if destination_id:
+                return destination_id
+
+    for unique_id in missing_ids:
+        logger.warning("Reply asl posti destinationda topilmadi: %s", unique_id)
     return None
 
 
@@ -427,7 +481,7 @@ async def process_single_message(client, chat_id: int, message, from_catchup: bo
             return False
 
         marker = encode_marker(chat_id, source_ids)
-        reply_to = get_reply_dest_id(chat_id, [message])
+        reply_to = await get_reply_dest_id(client, chat_id, [message])
 
         if has_file_media(message):
             caption = attach_marker(text, marker, MAX_CAPTION_LENGTH)
@@ -479,7 +533,7 @@ async def process_album_messages(client, chat_id: int, messages: list, from_catc
             return False
 
         marker = encode_marker(chat_id, source_ids)
-        reply_to = get_reply_dest_id(chat_id, messages)
+        reply_to = await get_reply_dest_id(client, chat_id, messages)
 
         if files:
             marked_caption = attach_marker(caption, marker, MAX_CAPTION_LENGTH)
