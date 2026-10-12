@@ -38,10 +38,12 @@ Quyidagi 3 bosqichni ketma-ket bajaring.
    | `ADMIN_CHAT_ID` | Telegram chat ID raqamingiz                  |
 
 6. **Create / Deploy** bosing. 2–3 daqiqada bot ishga tushadi.
-   Loglarda `Bot ishga tushdi` va `Health-check server ...` ko'rinsa — tayyor ✅
+Loglarda `Bot ishga tushdi va background tasklar boshlandi` ko'rinsa,
+Telegram handlerlari va avtomatik yuborish vazifasi ishga tushgan.
 
 Render sizga `https://super-uzbek-bot.onrender.com` kabi manzil beradi.
-Brauzerda ochsangiz `✅ Bot ishlayapti` chiqadi.
+Asosiy `/` yo'li Telegram webhook serverida HTTP 404 qaytaradi. Bu servis
+HTTP so'roviga javob berganini bildiradi, avtomatik xabar yuborilganini emas.
 
 ---
 
@@ -50,7 +52,7 @@ Brauzerda ochsangiz `✅ Bot ishlayapti` chiqadi.
 Bot **webhook** rejimida ishlaydi: Telegram har bir xabarni to'g'ridan-to'g'ri
 Render manziliga yuboradi. Render bepul servisi 15 daqiqa harakatsizlikdan keyin
 uxlasa ham, **kelgan xabarning o'zi uni uyg'otadi** — tashqi ping (UptimeRobot,
-keep-alive) shart emas.
+keep-alive) qo'lda so'ralgan xabarlar uchun shart emas.
 
 - Render `RENDER_EXTERNAL_URL` muhit o'zgaruvchisini avtomatik beradi → bot
   webhook'ni o'zi o'rnatadi (`bot.py` ichida).
@@ -63,21 +65,30 @@ keep-alive) shart emas.
 ping yuborib servisni uyg'oq tutadi. Avtomatik kundalik xabarlar belgilangan
 vaqtga yaqin yuborilishi uchun bu workflow yoqilgan bo'lishi kerak.
 
+Workflow Super Uzbek bot va Avtoelon servislarini alohida tekshiradi.
+GitHub `schedule` ishga tushishni kechiktirishi mumkin; uni aniq soatdagi
+yuborishga kafolat deb hisoblamang. Server kech uyg'onsa, saqlanib qolgan
+sozlamalardagi shu kunning yuborilmagan xabarlari jo'natiladi. Manba yoki
+Telegram vaqtincha ishlamasa, qayta urinishlar orasida 5 daqiqa kutiladi.
+Bugun o'tib ketgan vaqt yangi tanlansa, jadval ertasi kundan boshlanadi.
+
 ## Avtomatik xabar sozlamalarini saqlash
 
 Bot foydalanuvchi tanlagan vaqtlarni `notification_settings.json` faylida
 saqlaydi. Lokal kompyuterda bu fayl qayta ishga tushirishdan keyin ham qoladi.
 
-Render Free servisida lokal fayllar doimiy emas: yangi deploy yoki instans
-almashtirilganda sozlamalar yo'qolishi mumkin. Doimiy Render disk ulangan bo'lsa,
+Render Free servisida lokal fayllar doimiy emas: servis uxlaganda, qayta ishga
+tushganda yoki deploy qilinganda sozlamalar yo'qoladi. Free tarifga doimiy
+disk ulab bo'lmaydi. Doimiy Render disk ulangan pullik servis bo'lsa,
 quyidagi environment variable'ni disk ichidagi manzilga sozlang:
 
 ```text
 NOTIFICATION_SETTINGS_FILE=/var/data/notification_settings.json
 ```
 
-Doimiy disksiz rejim ishlaydi, lekin deploydan keyin foydalanuvchilar avtomatik
-xabar vaqtlarini qayta tanlashlari mumkin.
+Doimiy saqlashsiz avtomatik xabarlarni ishonchli deb bo'lmaydi. Free servisda
+barqaror ishlatish uchun tashqi doimiy baza va tashqi uyg'otish jadvali kerak.
+Rasmiy cheklovlar: https://render.com/docs/free
 
 ---
 

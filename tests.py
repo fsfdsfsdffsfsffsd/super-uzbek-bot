@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import bot as bot_module
 from bot import SuperUzbekBot, PrayerData, PrayerTime, CurrencyData, AirQualityData, WeatherData, MagneticData, cache, tashkent_now, AIR_QUALITY_CACHE_TIME, prayer_cache_seconds_until_refresh, redact_sensitive_text
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 class TestSuperUzbekBot(unittest.TestCase):
     def setUp(self):
@@ -568,7 +568,7 @@ class TestAutomaticNotificationSettings(unittest.TestCase):
         self.assertTrue(enabled.enabled)
         self.assertEqual(enabled.time_str, "07:00")
 
-    def test_due_matching_uses_asia_tashkent_with_restart_grace_window(self):
+    def test_due_matching_uses_asia_tashkent_and_catches_up_after_restart(self):
         store = self.make_store()
         store.upsert(101, 202, "prayer", "07:00")
         store.upsert(101, 202, "weather", "08:00")
@@ -576,14 +576,17 @@ class TestAutomaticNotificationSettings(unittest.TestCase):
         # 02:00 UTC is 07:00 in Asia/Tashkent.
         due = store.due_at(datetime(2026, 9, 14, 2, 0, 45, tzinfo=timezone.utc))
         shortly_after = store.due_at(datetime(2026, 9, 14, 2, 1, tzinfo=timezone.utc))
-        too_late = store.due_at(datetime(2026, 9, 14, 2, 15, tzinfo=timezone.utc))
+        much_later = store.due_at(datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc))
 
         self.assertEqual([(item.user_id, item.kind) for item in due], [(101, "prayer")])
         self.assertEqual(
             [(item.user_id, item.kind) for item in shortly_after],
             [(101, "prayer")],
         )
-        self.assertEqual(too_late, [])
+        self.assertEqual(
+            [(item.user_id, item.kind) for item in much_later],
+            [(101, "prayer"), (101, "weather")],
+        )
 
     def test_due_matching_rejects_naive_datetime(self):
         store = self.make_store()
@@ -591,6 +594,28 @@ class TestAutomaticNotificationSettings(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             store.due_at(datetime(2026, 9, 14, 7, 0))
+
+    def test_new_past_time_schedule_starts_on_next_day(self):
+        store = self.make_store()
+        activated_at = datetime(2026, 9, 14, 13, 0, tzinfo=timezone.utc)
+        store.upsert(
+            101,
+            202,
+            "prayer",
+            "07:00",
+            activated_at=activated_at,
+        )
+
+        self.assertEqual(store.due_at(activated_at), [])
+        self.assertEqual(
+            [
+                (item.user_id, item.kind)
+                for item in store.due_at(
+                    datetime(2026, 9, 15, 2, 0, tzinfo=timezone.utc)
+                )
+            ],
+            [(101, "prayer")],
+        )
 
     def test_disabled_setting_is_not_due(self):
         store = self.make_store()
@@ -683,6 +708,18 @@ class TestAutomaticNotificationDispatch(unittest.IsolatedAsyncioTestCase):
             [(101, "weather")],
         )
 
+        await self.service.dispatch_due(
+            self.sender,
+            now + timedelta(minutes=1),
+        )
+        self.assertEqual(self.sender.send_message.await_count, 1)
+
+        await self.service.dispatch_due(
+            self.sender,
+            now + timedelta(minutes=5),
+        )
+        self.assertEqual(self.sender.send_message.await_count, 2)
+
     async def test_failed_data_fetch_message_is_not_sent_or_marked(self):
         self.store.upsert(101, 201, "weather", "08:00")
         now = datetime(2026, 9, 14, 3, 0, tzinfo=timezone.utc)
@@ -698,6 +735,43 @@ class TestAutomaticNotificationDispatch(unittest.IsolatedAsyncioTestCase):
             [(item.user_id, item.kind) for item in self.store.due_at(now)],
             [(101, "weather")],
         )
+
+    async def test_receipt_save_failure_does_not_resend_delivered_message(self):
+        self.store.upsert(101, 201, "weather", "08:00")
+        now = datetime(2026, 9, 14, 3, 0, tzinfo=timezone.utc)
+        with patch.object(self.store, "mark_sent", side_effect=OSError("Disk unavailable")):
+            self.assertEqual(await self.service.dispatch_due(self.sender, now), 1)
+            self.assertEqual(
+                await self.service.dispatch_due(self.sender, now + timedelta(minutes=5)), 0
+            )
+        await self.service.dispatch_due(self.sender, now + timedelta(minutes=10))
+        self.sender.send_message.assert_awaited_once()
+        self.assertEqual(self.store.due_at(now), [])
+
+
+class TestNotificationCallbacks(unittest.IsolatedAsyncioTestCase):
+    async def test_expired_callback_still_saves_and_updates_menu(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = bot_module.NotificationSettingsStore(Path(directory) / "settings.json")
+            update = MagicMock()
+            update.effective_chat.type = bot_module.ChatType.PRIVATE
+            update.effective_chat.id = 201
+            update.effective_user.id = 101
+            update.callback_query.data = "notify:set:weather:08:00"
+            update.callback_query.answer = AsyncMock(side_effect=bot_module.BadRequest(
+                "Query is too old and response timeout expired or query id is invalid"
+            ))
+            update.callback_query.edit_message_text = AsyncMock()
+            with patch.object(bot_module, "notification_store", store):
+                await bot_module.handle_notification_callback(update)
+            self.assertEqual(store.get(101, "weather").time_str, "08:00")
+            update.callback_query.edit_message_text.assert_awaited_once()
+
+    async def test_unrelated_callback_errors_are_not_swallowed(self):
+        query = MagicMock()
+        query.answer = AsyncMock(side_effect=bot_module.BadRequest("Unexpected error"))
+        with self.assertRaises(bot_module.BadRequest):
+            await bot_module.answer_notification_callback(query)
 
 if __name__ == '__main__':
     unittest.main()

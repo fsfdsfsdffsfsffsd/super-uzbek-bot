@@ -22,7 +22,7 @@ SUPPORTED_NOTIFICATION_KINDS = frozenset(
 )
 _TIME_PATTERN = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
 _TASHKENT_TZ = timezone(timedelta(hours=5), "Asia/Tashkent")
-NOTIFICATION_GRACE_MINUTES = 15
+NOTIFICATION_RETRY_MINUTES = 5
 
 
 @dataclass(frozen=True)
@@ -186,22 +186,37 @@ class NotificationSettingsStore:
         kind: str,
         time_str: str,
         enabled: bool = True,
+        activated_at: Optional[datetime] = None,
     ) -> NotificationSetting:
         _validate_setting_values(user_id, chat_id, kind, time_str)
         if not isinstance(enabled, bool):
             raise ValueError("enabled boolean bo'lishi kerak")
+        if activated_at is not None:
+            _validate_aware_datetime(activated_at)
 
         with self._lock:
             settings = self._load_unlocked()
             key = self._key(user_id, kind)
             previous = settings.get(key)
+            last_sent_date = previous.last_sent_date if previous else None
+            if activated_at is not None:
+                local_now = activated_at.astimezone(_TASHKENT_TZ)
+                scheduled_hour, scheduled_minute = map(int, time_str.split(":"))
+                scheduled_at = local_now.replace(
+                    hour=scheduled_hour,
+                    minute=scheduled_minute,
+                    second=0,
+                    microsecond=0,
+                )
+                if local_now >= scheduled_at:
+                    last_sent_date = local_now.date().isoformat()
             value = NotificationSetting(
                 user_id=user_id,
                 chat_id=chat_id,
                 kind=kind,
                 time_str=time_str,
                 enabled=enabled,
-                last_sent_date=previous.last_sent_date if previous else None,
+                last_sent_date=last_sent_date,
             )
             updated = {**settings, key: value}
             self._save_unlocked(updated)
@@ -264,11 +279,10 @@ class NotificationSettingsStore:
                 second=0,
                 microsecond=0,
             )
-            elapsed = local_now - scheduled_at
             if (
                 item.enabled
                 and item.last_sent_date != local_date
-                and timedelta(0) <= elapsed < timedelta(minutes=NOTIFICATION_GRACE_MINUTES)
+                and local_now >= scheduled_at
             ):
                 due.append(item)
         return sorted(due, key=lambda item: (item.user_id, item.kind))
@@ -278,14 +292,32 @@ class AutomaticNotificationService:
     def __init__(self, store: NotificationSettingsStore, provider: NotificationProvider):
         self.store = store
         self.provider = provider
+        self._next_attempt_at: dict[tuple[int, str], datetime] = {}
+        self._delivered_at: dict[tuple[int, str], datetime] = {}
 
     async def dispatch_due(self, sender: Any, now: datetime) -> int:
         due = self.store.due_at(now)
+        local_date = now.astimezone(_TASHKENT_TZ).date()
+        self._delivered_at = {
+            key: sent_at for key, sent_at in self._delivered_at.items()
+            if sent_at.astimezone(_TASHKENT_TZ).date() == local_date
+        }
         messages: dict[str, str] = {}
         sent_count = 0
 
         for setting in due:
+            key = (setting.user_id, setting.kind)
+            next_attempt_at = self._next_attempt_at.get(key)
+            if next_attempt_at is not None and now < next_attempt_at:
+                continue
+            self._next_attempt_at[key] = now + timedelta(
+                minutes=NOTIFICATION_RETRY_MINUTES
+            )
             try:
+                if key in self._delivered_at:
+                    self.store.mark_sent(setting.user_id, setting.kind, self._delivered_at[key])
+                    self._next_attempt_at.pop(key, None)
+                    continue
                 if setting.kind not in messages:
                     builder = getattr(
                         self.provider,
@@ -300,8 +332,10 @@ class AutomaticNotificationService:
                     text=text,
                     parse_mode=ParseMode.MARKDOWN,
                 )
-                self.store.mark_sent(setting.user_id, setting.kind, now)
+                self._delivered_at[key] = now
                 sent_count += 1
+                self.store.mark_sent(setting.user_id, setting.kind, now)
+                self._next_attempt_at.pop(key, None)
             except Exception as exc:
                 logger.error(
                     "Avtomatik %s xabari yuborilmadi: %s",

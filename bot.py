@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 from telegram.constants import ChatType, ParseMode
+from telegram.error import BadRequest
 from typing import List, Dict, Optional, Any
 import time
 from dataclasses import dataclass
@@ -1407,10 +1408,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def answer_notification_callback(query: Any, *args: Any, **kwargs: Any) -> None:
+    """An expired callback after a cold start must not cancel saving/settings UI."""
+    try:
+        await query.answer(*args, **kwargs)
+    except BadRequest as exc:
+        message = str(exc).lower()
+        if "query is too old" not in message and "query id is invalid" not in message:
+            raise
+
+
 async def handle_notification_callback(update: Update) -> None:
     query = update.callback_query
     if update.effective_chat.type != ChatType.PRIVATE:
-        await query.answer(
+        await answer_notification_callback(query,
             "Avtomatik xabarlar faqat bot bilan shaxsiy chatda sozlanadi.",
             show_alert=True,
         )
@@ -1420,7 +1431,7 @@ async def handle_notification_callback(update: Update) -> None:
     data = query.data or ""
 
     if data == "notify:menu":
-        await query.answer()
+        await answer_notification_callback(query)
         await query.edit_message_text(
             get_notification_menu_text(),
             parse_mode=ParseMode.MARKDOWN,
@@ -1431,10 +1442,10 @@ async def handle_notification_callback(update: Update) -> None:
     if data.startswith("notify:select:"):
         parts = data.split(":")
         if len(parts) != 3 or parts[2] not in SUPPORTED_NOTIFICATION_KINDS:
-            await query.answer("Noto'g'ri tanlov", show_alert=True)
+            await answer_notification_callback(query, "Noto'g'ri tanlov", show_alert=True)
             return
         kind = parts[2]
-        await query.answer()
+        await answer_notification_callback(query)
         await query.edit_message_text(
             get_notification_kind_text(user_id, kind),
             parse_mode=ParseMode.MARKDOWN,
@@ -1453,6 +1464,7 @@ async def handle_notification_callback(update: Update) -> None:
                 kind=kind,
                 time_str=action["time"],
                 enabled=True,
+                activated_at=tashkent_now(),
             )
             confirmation = f"Har kuni {action['time']} ga sozlandi ✅"
         else:
@@ -1464,16 +1476,17 @@ async def handle_notification_callback(update: Update) -> None:
                     kind=kind,
                     time_str=default_time,
                     enabled=action["enabled"],
+                    activated_at=tashkent_now(),
                 )
             else:
                 notification_store.set_enabled(user_id, kind, action["enabled"])
             confirmation = "Yoqildi ✅" if action["enabled"] else "O'chirildi 🔕"
     except (KeyError, OSError, ValueError) as exc:
         logger.warning("Avtomatik xabar callback xatosi: %s", exc)
-        await query.answer("Sozlamani saqlab bo'lmadi", show_alert=True)
+        await answer_notification_callback(query, "Sozlamani saqlab bo'lmadi", show_alert=True)
         return
 
-    await query.answer(confirmation)
+    await answer_notification_callback(query, confirmation)
     await query.edit_message_text(
         get_notification_menu_text(),
         parse_mode=ParseMode.MARKDOWN,
@@ -1599,7 +1612,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def start_notification_background_task(sender: Any) -> None:
-    """Check daily subscriptions frequently enough for the grace window."""
+    """Send every unsent daily notification once its scheduled time has passed."""
     while True:
         try:
             sent_count = await notification_service.dispatch_due(sender, tashkent_now())
