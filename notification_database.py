@@ -50,8 +50,19 @@ class PostgresNotificationSettingsStore(NotificationSettingsStore):
                     cursor.execute("SET LOCAL statement_timeout = 10000")
                     cursor.execute(sql, parameters)
                     return cursor.fetchall() if cursor.description else []
-        except psycopg.Error:
-            raise NotificationStorageError("Avtomatik xabarlar bazasi bilan ulanishda xatolik") from None
+        except psycopg.Error as exc:
+            message = str(exc).lower()
+            reason = (
+                "certificate" if "certificate" in message
+                else "password" if "password" in message
+                else "pooler_tenant" if "tenant" in message
+                else "timeout" if "timeout" in message
+                else "network" if "network" in message or "resolve" in message
+                else exc.sqlstate or type(exc).__name__
+            )
+            raise NotificationStorageError(
+                f"Avtomatik xabarlar bazasi bilan ulanishda xatolik ({reason})"
+            ) from None
 
     def initialize(self) -> None:
         self._query("CREATE SCHEMA IF NOT EXISTS bot_private")
