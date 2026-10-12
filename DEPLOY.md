@@ -95,10 +95,10 @@ Rasmiy cheklovlar: https://render.com/docs/free
 1. Supabase Free'da bot uchun alohida loyiha yarating (https://supabase.com/pricing).
 2. Connect -> Session pooler manzilini oling. Render Environment'da
    `NOTIFICATION_DATABASE_URL` qilib saqlang; parolni chat yoki GitHub'ga yozmang.
-   Sertifikat xususiy CA bilan imzolangan bo'lsa, Supabase Database Settings'dan
-   CA sertifikatini olib Render Secret Files'ga qo'shing va
-   `NOTIFICATION_DATABASE_CA_FILE=/etc/secrets/supabase-ca.crt` ni sozlang.
-   Standart ommaviy CA'lar uchun mavjud certifi to'plami ishlatiladi.
+   Supabase manzillari uchun Database Settings'dagi rasmiy ochiq CA sertifikati
+   `supabase-ca.crt` ishlatiladi; boshqa provayderlar uchun certifi ishlatiladi.
+   Maxsus CA bo'lsa, `NOTIFICATION_DATABASE_CA_FILE` bilan sertifikat fayli
+   manzilini bering. TLS va hostname tekshiruvi doim yoqilgan qoladi.
 3. Bot ishga tushganda `bot_private.notification_settings` jadvali yaratiladi.
    Bu xususiy schema Supabase'ning public REST API'siga chiqarilmaydi.
 4. Supabase SQL Editor'da `supabase_notification_wake.sql` ni bajaring.

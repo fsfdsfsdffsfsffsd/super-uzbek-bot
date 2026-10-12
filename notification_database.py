@@ -1,7 +1,9 @@
 """Durable notification storage in a private PostgreSQL schema."""
 
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
 import certifi
 import psycopg
@@ -26,7 +28,13 @@ class PostgresNotificationSettingsStore(NotificationSettingsStore):
 
     def __init__(self, database_url: str, certificate_file: Optional[str] = None):
         self._database_url = database_url
-        self._certificate_file = certificate_file or certifi.where()
+        hostname = urlsplit(database_url).hostname or ""
+        provider_certificate = (
+            str(Path(__file__).with_name("supabase-ca.crt"))
+            if hostname.endswith((".pooler.supabase.com", ".supabase.co"))
+            else certifi.where()
+        )
+        self._certificate_file = certificate_file or provider_certificate
 
     def _query(self, sql: str, parameters: tuple = ()) -> list[dict]:
         try:
