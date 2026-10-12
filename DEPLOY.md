@@ -90,6 +90,34 @@ Doimiy saqlashsiz avtomatik xabarlarni ishonchli deb bo'lmaydi. Free servisda
 barqaror ishlatish uchun tashqi doimiy baza va tashqi uyg'otish jadvali kerak.
 Rasmiy cheklovlar: https://render.com/docs/free
 
+## Bepul doimiy saqlash va aniqroq uyg'otish
+
+1. Supabase Free'da bot uchun alohida loyiha yarating (https://supabase.com/pricing).
+2. Connect -> Session pooler manzilini oling. Render Environment'da
+   `NOTIFICATION_DATABASE_URL` qilib saqlang; parolni chat yoki GitHub'ga yozmang.
+   Sertifikat xususiy CA bilan imzolangan bo'lsa, Supabase Database Settings'dan
+   CA sertifikatini olib Render Secret Files'ga qo'shing va
+   `NOTIFICATION_DATABASE_CA_FILE=/etc/secrets/supabase-ca.crt` ni sozlang.
+   Standart ommaviy CA'lar uchun mavjud certifi to'plami ishlatiladi.
+3. Bot ishga tushganda `bot_private.notification_settings` jadvali yaratiladi.
+   Bu xususiy schema Supabase'ning public REST API'siga chiqarilmaydi.
+4. Supabase SQL Editor'da `supabase_notification_wake.sql` ni bajaring.
+   Jadval har daqiqada tekshiriladi; xabar vaqtidan 3 daqiqa oldin va
+   yuborilmagan xabar bo'lgandagina Render uyg'otiladi. GitHub schedule'ning
+   kechikishiga bog'liqlik kamayadi, servis bekoriga sutka bo'yi uyg'oq qolmaydi.
+5. Botda vaqtlarni bir marta qayta tanlang. Keyingi uyqu, restart va deploylarda
+   sozlamalar bazada qoladi. Baza ulanishi xato bo'lsa, bot lokal faylga yashirin
+   qaytmaydi: ishga tushish xato bilan to'xtaydi yoki saqlashda xatolik beradi.
+
+Ulanishda TLS sertifikati tekshiriladi. Yuborilgan sana va qayta urinish uchun
+5 daqiqalik band qilish ham bazada saqlanadi. Telegram muvaffaqiyatli qabul
+qilgan zahoti server o'chib qolsa va sana yozilmasa, kamdan-kam takroriy xabar
+ehtimoli qoladi; Telegram sendMessage idempotent kalit qabul qilmaydi.
+
+Supabase Free faol bo'lmagan loyihani 1 haftadan keyin pauza qilishi mumkin,
+Render Free esa oylik bepul soatlarni boshqa servislar bilan bo'lishadi.
+Ikkala bepul tarif ham uzluksiz xizmat yoki aynan sekunddagi yuborishni kafolatlamaydi.
+
 ---
 
 ## Kodni yangilaganda

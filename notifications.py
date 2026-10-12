@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -10,6 +11,7 @@ import threading
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from time import monotonic
 from typing import Any, Optional, Protocol
 
 from telegram.constants import ParseMode
@@ -23,6 +25,8 @@ SUPPORTED_NOTIFICATION_KINDS = frozenset(
 _TIME_PATTERN = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
 _TASHKENT_TZ = timezone(timedelta(hours=5), "Asia/Tashkent")
 NOTIFICATION_RETRY_MINUTES = 5
+NOTIFICATION_BUILD_TIMEOUT_SECONDS = 120
+NOTIFICATION_SEND_TIMEOUT_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -171,6 +175,15 @@ class NotificationSettingsStore:
         with self._lock:
             return tuple(self._load_unlocked().values())
 
+    def for_user(self, user_id: int) -> tuple[NotificationSetting, ...]:
+        _validate_setting_values(user_id, 1, "prayer", "00:00")
+        return tuple(item for item in self.all() if item.user_id == user_id)
+
+    def claim_due(self, user_id: int, kind: str, now: datetime) -> bool:
+        """Recheck changes made by a user since the tick; one process throttles attempts."""
+        _validate_setting_values(user_id, 1, kind, "00:00")
+        return any(item.user_id == user_id and item.kind == kind for item in self.due_at(now))
+
     def get(self, user_id: int, kind: str) -> Optional[NotificationSetting]:
         if not isinstance(user_id, int) or isinstance(user_id, bool) or user_id <= 0:
             raise ValueError("Noto'g'ri foydalanuvchi ID")
@@ -296,45 +309,66 @@ class AutomaticNotificationService:
         self._delivered_at: dict[tuple[int, str], datetime] = {}
 
     async def dispatch_due(self, sender: Any, now: datetime) -> int:
-        due = self.store.due_at(now)
+        started = monotonic()
+        due = await asyncio.to_thread(self.store.due_at, now)
         local_date = now.astimezone(_TASHKENT_TZ).date()
         self._delivered_at = {
             key: sent_at for key, sent_at in self._delivered_at.items()
             if sent_at.astimezone(_TASHKENT_TZ).date() == local_date
         }
         messages: dict[str, str] = {}
+        message_date = local_date
         sent_count = 0
 
         for setting in due:
+            attempt_now = now + timedelta(seconds=int(monotonic() - started))
+            if attempt_now.astimezone(_TASHKENT_TZ).date() != message_date:
+                messages = {}
+                message_date = attempt_now.astimezone(_TASHKENT_TZ).date()
             key = (setting.user_id, setting.kind)
             next_attempt_at = self._next_attempt_at.get(key)
-            if next_attempt_at is not None and now < next_attempt_at:
+            if next_attempt_at is not None and attempt_now < next_attempt_at:
                 continue
-            self._next_attempt_at[key] = now + timedelta(
+            self._next_attempt_at[key] = attempt_now + timedelta(
                 minutes=NOTIFICATION_RETRY_MINUTES
             )
             try:
-                if key in self._delivered_at:
-                    self.store.mark_sent(setting.user_id, setting.kind, self._delivered_at[key])
+                if key in self._delivered_at and (
+                    self._delivered_at[key].astimezone(_TASHKENT_TZ).date()
+                    == attempt_now.astimezone(_TASHKENT_TZ).date()
+                ):
+                    await asyncio.to_thread(
+                        self.store.mark_sent, setting.user_id, setting.kind, self._delivered_at[key]
+                    )
                     self._next_attempt_at.pop(key, None)
+                    continue
+                if not await asyncio.to_thread(
+                    self.store.claim_due, setting.user_id, setting.kind, attempt_now
+                ):
                     continue
                 if setting.kind not in messages:
                     builder = getattr(
                         self.provider,
                         f"build_{setting.kind}_notification",
                     )
-                    messages = {**messages, setting.kind: await builder()}
+                    messages = {**messages, setting.kind: await asyncio.wait_for(
+                        builder(), timeout=NOTIFICATION_BUILD_TIMEOUT_SECONDS
+                    )}
                 text = messages[setting.kind]
                 if not text or text.startswith(("⚠️", "❌")):
                     continue
-                await sender.send_message(
-                    chat_id=setting.chat_id,
-                    text=text,
-                    parse_mode=ParseMode.MARKDOWN,
+                await asyncio.wait_for(
+                    sender.send_message(
+                        chat_id=setting.chat_id,
+                        text=text,
+                        parse_mode=ParseMode.MARKDOWN,
+                    ),
+                    timeout=NOTIFICATION_SEND_TIMEOUT_SECONDS,
                 )
-                self._delivered_at[key] = now
+                sent_at = now + timedelta(seconds=int(monotonic() - started))
+                self._delivered_at[key] = sent_at
                 sent_count += 1
-                self.store.mark_sent(setting.user_id, setting.kind, now)
+                await asyncio.to_thread(self.store.mark_sent, setting.user_id, setting.kind, sent_at)
                 self._next_attempt_at.pop(key, None)
             except Exception as exc:
                 logger.error(

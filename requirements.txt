@@ -5,3 +5,4 @@ certifi
 python-dotenv
 Brotli
 curl_cffi
+psycopg[binary]>=3.2,<4

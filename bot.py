@@ -29,6 +29,7 @@ from notifications import (
     SUPPORTED_NOTIFICATION_KINDS,
     parse_notification_callback,
 )
+from notification_database import PostgresNotificationSettingsStore
 
 # Windows konsolida emoji (✅, 🕌 ...) chiqarishda UnicodeEncodeError bo'lmasligi uchun
 # stdout/stderr ni UTF-8 ga o'tkazamiz
@@ -60,6 +61,7 @@ def prayer_cache_seconds_until_refresh(now: Optional[datetime] = None) -> int:
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 IQAIR_API_KEY = os.getenv("IQAIR_API_KEY")
+NOTIFICATION_DATABASE_URL = os.getenv("NOTIFICATION_DATABASE_URL")
 NOTIFICATION_SETTINGS_FILE = Path(
     os.getenv("NOTIFICATION_SETTINGS_FILE", "notification_settings.json")
 )
@@ -76,7 +78,7 @@ if ADMIN_CHAT_ID:
 # Loglarga token va API kalitlari tushib qolmasligi uchun
 def redact_sensitive_text(value: Any) -> str:
     text = str(value)
-    for secret in (BOT_TOKEN, IQAIR_API_KEY):
+    for secret in (BOT_TOKEN, IQAIR_API_KEY, NOTIFICATION_DATABASE_URL):
         if secret:
             text = text.replace(secret, "[REDACTED]")
 
@@ -1274,7 +1276,13 @@ class SuperUzbekBot:
         cache[key] = {'data': data, 'time': time.time(), 'expiry': expiry or CACHE_TIME}
 
 bot = SuperUzbekBot()
-notification_store = NotificationSettingsStore(NOTIFICATION_SETTINGS_FILE)
+notification_store = (
+    PostgresNotificationSettingsStore(
+        NOTIFICATION_DATABASE_URL, os.getenv("NOTIFICATION_DATABASE_CA_FILE")
+    )
+    if NOTIFICATION_DATABASE_URL
+    else NotificationSettingsStore(NOTIFICATION_SETTINGS_FILE)
+)
 notification_service = AutomaticNotificationService(notification_store, bot)
 
 NOTIFICATION_KIND_DETAILS = (
@@ -1304,8 +1312,9 @@ def get_notification_menu_text() -> str:
 
 def get_notification_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
     rows = []
+    user_settings = {item.kind: item for item in notification_store.for_user(user_id)}
     for kind, emoji, label, _ in NOTIFICATION_KIND_DETAILS:
-        setting = notification_store.get(user_id, kind)
+        setting = user_settings.get(kind)
         if setting and setting.enabled:
             status = f"{setting.time_str} ✅"
         elif setting:
@@ -1435,7 +1444,7 @@ async def handle_notification_callback(update: Update) -> None:
         await query.edit_message_text(
             get_notification_menu_text(),
             parse_mode=ParseMode.MARKDOWN,
-            reply_markup=get_notification_menu_keyboard(user_id),
+            reply_markup=await asyncio.to_thread(get_notification_menu_keyboard, user_id),
         )
         return
 
@@ -1447,9 +1456,9 @@ async def handle_notification_callback(update: Update) -> None:
         kind = parts[2]
         await answer_notification_callback(query)
         await query.edit_message_text(
-            get_notification_kind_text(user_id, kind),
+            await asyncio.to_thread(get_notification_kind_text, user_id, kind),
             parse_mode=ParseMode.MARKDOWN,
-            reply_markup=get_notification_time_keyboard(user_id, kind),
+            reply_markup=await asyncio.to_thread(get_notification_time_keyboard, user_id, kind),
         )
         return
 
@@ -1458,7 +1467,7 @@ async def handle_notification_callback(update: Update) -> None:
         kind = action["kind"]
         _, _, default_time = get_notification_kind_detail(kind)
         if action["action"] == "set":
-            notification_store.upsert(
+            await asyncio.to_thread(notification_store.upsert,
                 user_id=user_id,
                 chat_id=chat_id,
                 kind=kind,
@@ -1468,9 +1477,9 @@ async def handle_notification_callback(update: Update) -> None:
             )
             confirmation = f"Har kuni {action['time']} ga sozlandi ✅"
         else:
-            setting = notification_store.get(user_id, kind)
+            setting = await asyncio.to_thread(notification_store.get, user_id, kind)
             if setting is None:
-                notification_store.upsert(
+                await asyncio.to_thread(notification_store.upsert,
                     user_id=user_id,
                     chat_id=chat_id,
                     kind=kind,
@@ -1479,7 +1488,7 @@ async def handle_notification_callback(update: Update) -> None:
                     activated_at=tashkent_now(),
                 )
             else:
-                notification_store.set_enabled(user_id, kind, action["enabled"])
+                await asyncio.to_thread(notification_store.set_enabled, user_id, kind, action["enabled"])
             confirmation = "Yoqildi ✅" if action["enabled"] else "O'chirildi 🔕"
     except (KeyError, OSError, ValueError) as exc:
         logger.warning("Avtomatik xabar callback xatosi: %s", exc)
@@ -1490,14 +1499,21 @@ async def handle_notification_callback(update: Update) -> None:
     await query.edit_message_text(
         get_notification_menu_text(),
         parse_mode=ParseMode.MARKDOWN,
-        reply_markup=get_notification_menu_keyboard(user_id),
+        reply_markup=await asyncio.to_thread(get_notification_menu_keyboard, user_id),
     )
 
 
 async def inline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if (query.data or "").startswith("notify:"):
-        await handle_notification_callback(update)
+        try:
+            await handle_notification_callback(update)
+        except OSError as exc:
+            logger.warning("Avtomatik xabar sozlamalarini ochib bo'lmadi: %s", exc)
+            await answer_notification_callback(query)
+            await query.message.reply_text(
+                "⚠️ Sozlamalarni hozir ochib bo'lmadi. Birozdan keyin qayta urinib ko'ring."
+            )
         return
 
     await query.answer("Ma'lumot yuklanmoqda...") 
@@ -1560,11 +1576,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Avtomatik xabarlarni bot bilan shaxsiy chatda sozlang."
             )
         else:
-            await update.message.reply_text(
-                get_notification_menu_text(),
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=get_notification_menu_keyboard(user_id),
-            )
+            try:
+                markup = await asyncio.to_thread(get_notification_menu_keyboard, user_id)
+                await update.message.reply_text(
+                    get_notification_menu_text(), parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=markup,
+                )
+            except OSError as exc:
+                logger.warning("Avtomatik xabar sozlamalarini ochib bo'lmadi: %s", exc)
+                await update.message.reply_text(
+                    "⚠️ Sozlamalarni hozir ochib bo'lmadi. Birozdan keyin qayta urinib ko'ring."
+                )
 
     # 1. Namoz
     elif "Namoz" in text:
@@ -1626,6 +1648,8 @@ async def start_notification_background_task(sender: Any) -> None:
 
 async def post_init(application: Application):
     try:
+        if isinstance(notification_store, PostgresNotificationSettingsStore):
+            await asyncio.to_thread(notification_store.initialize)
         await bot.create_session()
         # Fon vazifasini saqlaymiz — to'xtaganda toza bekor qilish uchun
         bot.background_task = asyncio.create_task(bot.start_background_tasks())
@@ -1636,6 +1660,7 @@ async def post_init(application: Application):
         logger.info("Bot ishga tushdi va background tasklar boshlandi")
     except Exception as e:
         logger.error(f"Start error: {e}")
+        raise
 
 async def post_stop(application: Application):
     try:

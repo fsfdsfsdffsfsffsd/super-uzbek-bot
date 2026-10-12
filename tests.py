@@ -8,6 +8,8 @@ import bot as bot_module
 from bot import SuperUzbekBot, PrayerData, PrayerTime, CurrencyData, AirQualityData, WeatherData, MagneticData, cache, tashkent_now, AIR_QUALITY_CACHE_TIME, prayer_cache_seconds_until_refresh, redact_sensitive_text
 import asyncio
 from datetime import datetime, timedelta, timezone
+import notification_database
+import psycopg
 
 class TestSuperUzbekBot(unittest.TestCase):
     def setUp(self):
@@ -772,6 +774,102 @@ class TestNotificationCallbacks(unittest.IsolatedAsyncioTestCase):
         query.answer = AsyncMock(side_effect=bot_module.BadRequest("Unexpected error"))
         with self.assertRaises(bot_module.BadRequest):
             await bot_module.answer_notification_callback(query)
+
+    async def test_database_outage_when_opening_callback_menu_shows_response(self):
+        update = MagicMock()
+        update.effective_chat.type = bot_module.ChatType.PRIVATE
+        update.effective_chat.id = 201
+        update.effective_user.id = 101
+        update.callback_query.data = "notify:menu"
+        update.callback_query.answer = AsyncMock()
+        update.callback_query.edit_message_text = AsyncMock()
+        update.callback_query.message.reply_text = AsyncMock()
+        with patch.object(bot_module, "get_notification_menu_keyboard", side_effect=OSError("Unavailable")):
+            await bot_module.inline_handler(update, MagicMock())
+        response = update.callback_query.message.reply_text.await_args.args[0]
+        self.assertIn("qayta urinib", response)
+
+    async def test_database_outage_when_opening_main_menu_shows_response(self):
+        update = MagicMock()
+        update.message.text = "⚙️ Avtomatik xabarlar"
+        update.effective_chat.type = bot_module.ChatType.PRIVATE
+        update.message.reply_text = AsyncMock()
+        with patch.object(bot_module, "check_rate_limit", new=AsyncMock(return_value=True)):
+            with patch.object(bot_module, "get_notification_menu_keyboard", side_effect=OSError("Unavailable")):
+                await bot_module.handle_message(update, MagicMock())
+        response = update.message.reply_text.await_args.args[0]
+        self.assertIn("qayta urinib", response)
+
+
+class TestPostgresNotificationStorage(unittest.TestCase):
+    def setUp(self):
+        self.store = notification_database.PostgresNotificationSettingsStore(
+            "postgresql://test:private-test-password@db.invalid/postgres"
+        )
+
+    def test_database_errors_do_not_expose_credentials_or_fallback_to_file(self):
+        with patch.object(psycopg, "connect", side_effect=psycopg.OperationalError(
+            "connection failed: private-test-password"
+        )):
+            with self.assertRaises(notification_database.NotificationStorageError) as result:
+                self.store.get(101, "weather")
+        self.assertNotIn("private-test-password", str(result.exception))
+
+    def test_invalid_settings_are_rejected_before_network_access(self):
+        with patch.object(psycopg, "connect") as connect:
+            with self.assertRaises(ValueError):
+                self.store.upsert(101, 201, "weather", "24:00")
+            with self.assertRaises(ValueError):
+                self.store.get(True, "weather")
+        connect.assert_not_called()
+
+class TestNotificationDispatchConcurrency(unittest.IsolatedAsyncioTestCase):
+    async def test_midnight_does_not_send_yesterdays_unsent_late_schedule(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = bot_module.NotificationSettingsStore(Path(directory) / "settings.json")
+            store.upsert(101, 201, "weather", "23:59")
+            provider = MagicMock()
+            provider.build_weather_notification = AsyncMock(return_value="weather text")
+            sender = MagicMock()
+            sender.send_message = AsyncMock()
+            service = bot_module.AutomaticNotificationService(store, provider)
+            now = datetime(2026, 10, 12, 18, 59, 45, tzinfo=timezone.utc)
+            with patch("notifications.monotonic", side_effect=[0, 30]):
+                self.assertEqual(await service.dispatch_due(sender, now), 0)
+            sender.send_message.assert_not_awaited()
+
+    async def test_parallel_ticks_send_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = bot_module.NotificationSettingsStore(Path(directory) / "settings.json")
+            store.upsert(101, 201, "weather", "08:00")
+            provider = MagicMock()
+            provider.build_weather_notification = AsyncMock(return_value="weather text")
+            sender = MagicMock()
+            sender.send_message = AsyncMock()
+            service = bot_module.AutomaticNotificationService(store, provider)
+            now = datetime(2026, 10, 13, 3, 0, tzinfo=timezone.utc)
+            counts = await asyncio.gather(
+                service.dispatch_due(sender, now), service.dispatch_due(sender, now)
+            )
+            self.assertEqual(sum(counts), 1)
+            sender.send_message.assert_awaited_once()
+
+    async def test_another_instances_claim_prevents_send(self):
+        store = MagicMock()
+        from notifications import NotificationSetting
+        store.due_at.return_value = [NotificationSetting(101, 201, "weather", "08:00")]
+        store.claim_due.return_value = False
+        provider = MagicMock()
+        provider.build_weather_notification = AsyncMock(return_value="weather text")
+        sender = MagicMock()
+        sender.send_message = AsyncMock()
+        service = bot_module.AutomaticNotificationService(store, provider)
+        count = await service.dispatch_due(
+            sender, datetime(2026, 10, 13, 3, 0, tzinfo=timezone.utc)
+        )
+        self.assertEqual(count, 0)
+        provider.build_weather_notification.assert_not_awaited()
+        sender.send_message.assert_not_awaited()
 
 if __name__ == '__main__':
     unittest.main()
